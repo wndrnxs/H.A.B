@@ -40,7 +40,7 @@ function render() {
 
   const rail = el('aside', { class: 'rail' }, [
     el('div', { class: 'brand' }, [
-      el('span', { class: 'brand-mark', text: '家' }),
+      el('img', { class: 'brand-mark', src: 'assets/logo.png', alt: '', width: 38, height: 38 }),
       el('div', {}, [
         el('div', { class: 'brand-name', text: store.config.settings.household }),
         el('div', { class: 'brand-sub', text: 'HOUSEHOLD ACCOUNT BOOK' }),

@@ -3,14 +3,15 @@
 // 앱 파일은 '네트워크 먼저'로 가져온다. 캐시를 먼저 주면(stale-while-revalidate)
 // 고친 코드가 배포돼도 사용자는 한 박자 늦은 옛날 화면을 계속 보게 된다.
 // 글꼴처럼 절대 안 바뀌는 것만 캐시를 먼저 준다.
-const VERSION = 'v3';
+const VERSION = 'v4';
 const CACHE = `hab-shell-${VERSION}`;
 const SHELL = [
   './', './index.html', './manifest.webmanifest',
   './assets/styles.css', './assets/app.js', './assets/views.js',
   './assets/store.js', './assets/charts.js', './assets/util.js',
   './assets/firebase.js', './assets/firebase-config.js', './assets/version.js',
-  './icons/icon-192.png', './icons/icon-512.png',
+  './assets/logo.png',
+  './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png',
 ];
 
 self.addEventListener('install', (e) => {

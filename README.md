@@ -155,7 +155,8 @@ firestore.rules            보안 규칙 — 우리 가족만 우리 장부를
 firebase.json              Firestore·Hosting 배포 설정
 sw.js                      오프라인용 서비스 워커
 manifest.webmanifest       홈 화면 설치 정보
-tools/make-icons.mjs       아이콘 PNG 생성기 (node tools/make-icons.mjs)
+tools/make-logo.py         로고·아이콘 생성기 (python3 tools/make-logo.py)
+tools/logo-source.png      로고 원본 (배경 포함)
 ```
 
 의존성이 없습니다. `npm install` 할 것도, 빌드할 것도 없습니다.

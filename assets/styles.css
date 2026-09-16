@@ -107,9 +107,9 @@ button { cursor: pointer; }
 }
 .brand { display: flex; align-items: center; gap: 10px; }
 .brand-mark {
-  width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center;
-  background: var(--accent); color: var(--accent-ink);
-  font-family: var(--font-display); font-weight: 700; font-size: 19px;
+  width: 38px; height: 38px; flex: none;
+  /* 로고가 이미 둥근 사각형이라 따로 깎지 않는다 */
+  image-rendering: pixelated;
 }
 .brand-name { font-family: var(--font-display); font-size: 18px; font-weight: 700; line-height: 1.15; }
 .brand-sub { font-size: 9.5px; color: var(--ink-3); letter-spacing: .07em; white-space: nowrap; }
