@@ -35,13 +35,21 @@ npx http-server . -p 8080     # 또는 python3 -m http.server 8080
 브라우저에서 `http://localhost:8080` 을 엽니다.
 (모듈 스크립트를 쓰기 때문에 `index.html` 을 파일로 직접 열면 동작하지 않습니다. 반드시 서버로 띄우세요.)
 
-### 2. 휴대폰에서도 열리게 — GitHub Pages
+### 2. 휴대폰에서도 열리게 — Firebase Hosting
 
-1. 이 저장소의 **Settings → Pages → Source** 를 `GitHub Actions` 로 바꿉니다.
-2. `main` 브랜치에 올리면 `.github/workflows/pages.yml` 이 자동으로 배포합니다.
-3. `https://wndrnxs.github.io/H.A.B/` 에 접속한 뒤
-   - iPhone: 공유 → **홈 화면에 추가**
-   - Android: 메뉴 → **앱 설치**
+배포 주소는 **<https://house-ab.web.app>** 입니다.
+`.github/workflows/firebase-hosting.yml` 이 push 마다 자동으로 올립니다
+(저장소 시크릿 `FIREBASE_SERVICE_ACCOUNT` 에 배포용 서비스 계정 키 JSON 필요).
+
+터미널을 쓴다면 한 줄로도 됩니다.
+
+```bash
+npx firebase-tools deploy --only hosting
+```
+
+접속한 뒤
+- iPhone: 공유 → **홈 화면에 추가**
+- Android: 메뉴 → **앱 설치**
 
 ## 둘이 함께 쓰기 (Firebase)
 
@@ -88,17 +96,14 @@ firebase deploy --only firestore:rules
 
 ### 4. 주소 등록
 
-- **Firebase Hosting** — 주소는 <https://house-ab.web.app>. 로그인 도메인이 자동으로
-  등록돼 있어 추가 설정이 없습니다. `.github/workflows/firebase-hosting.yml` 이
-  push 마다 자동 배포하며, 저장소 시크릿 `FIREBASE_SERVICE_ACCOUNT` 에 배포용
-  서비스 계정 키(JSON)를 넣어 두면 동작합니다. 터미널을 쓴다면
-  `firebase deploy --only hosting` 한 줄로도 같은 일을 합니다.
-- **GitHub Pages 를 쓴다면** 콘솔 → Authentication → 설정 → **승인된 도메인** 에
-  `wndrnxs.github.io` 를 추가해야 로그인이 됩니다.
+Firebase Hosting 으로 배포하면 `house-ab.web.app` 과 `house-ab.firebaseapp.com` 이
+**승인된 도메인에 자동으로 들어가 있어** 따로 등록할 것이 없습니다.
+다른 곳에 올린다면 콘솔 → Authentication → 설정 → **승인된 도메인** 에 그 주소를
+추가해야 로그인이 됩니다.
 
 ### 5. 둘이 연결하기
 
-1. 내 폰/PC에서 앱을 열고 **설정 → 둘이 함께 쓰기 → Google로 로그인 → 새 가계부 만들기**.
+1. <https://house-ab.web.app> 을 열고 **설정 → 둘이 함께 쓰기 → Google로 로그인 → 새 가계부 만들기**.
    지금까지 이 기기에 쌓인 내역이 그대로 올라갑니다.
 2. 화면에 `7KQ2-M9XF` 같은 **초대 코드**가 나옵니다.
 3. 예비 신부님이 같은 주소에 들어가 로그인한 뒤 그 코드를 넣으면 합류합니다.
@@ -123,7 +128,7 @@ users/{내UID}                    내가 어느 가계부에 속하는지
 | 실행 위치 | 저장소 | 특징 |
 | --- | --- | --- |
 | Firebase 연결 + 로그인 | Firestore | **두 사람이 같은 장부를 실시간으로** 씁니다. 오프라인에서도 적힙니다. |
-| GitHub Pages·로컬 서버 (로그인 전) | 브라우저 `localStorage` | 기기 안에만 남습니다. |
+| 로그인 전 | 브라우저 `localStorage` | 기기 안에만 남습니다. |
 | Claude 아티팩트 | 아티팩트 공유 문서 저장소 | 같은 계정으로 연 PC·폰이 같은 장부를 봅니다. |
 
 같은 코드가 실행 환경과 로그인 상태를 보고 알아서 고릅니다 (`assets/store.js` 의 어댑터).
