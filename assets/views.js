@@ -262,7 +262,7 @@ function viewDashboard() {
     ]));
   }
 
-  out.push(card({ class: 'lift' }, [
+  const heroCard = card({ class: 'lift' }, [
     el('div', { class: 'hero' }, [
       el('div', { class: 'hero-main' }, [
         el('span', { class: 'eyebrow', text: `${periodLabel(ui.grain, ui.anchor)} 수지` }),
@@ -278,7 +278,7 @@ function viewDashboard() {
         ]),
       ]),
     ]),
-  ]));
+  ]);
 
   // 지출이 아니라 '자산 쪽으로 옮긴 돈'. 적금·투자 입금과 대출 원금상환이 여기 든다.
   // 카드대금은 뺀다 — 그 돈은 이미 쓴 시점에 지출로 한 번 세었다.
@@ -287,7 +287,7 @@ function viewDashboard() {
   const toSavings = sum(built.filter((x) => store.account(x.toAccountId).type !== 'loan'), (x) => x.amount);
   const toLoans = sum(built.filter((x) => store.account(x.toAccountId).type === 'loan'), (x) => x.amount);
 
-  out.push(el('div', { class: 'tiles' }, [
+  heroCard.append(el('div', { class: 'tiles' }, [
     tile('순자산', won(nw.net), nw.hidden.length ? `${nw.hidden.join(' · ')} 제외` : '자산 − 부채'),
     tile('총자산', won(nw.assets), '통장 · 현금 · 투자'),
     tile('부채', won(nw.debts), '카드값 · 대출 남은 돈'),
@@ -297,13 +297,14 @@ function viewDashboard() {
         ? [toSavings ? `적금·투자 ${wonShort(toSavings)}` : null, toLoans ? `대출 원금 ${wonShort(toLoans)}` : null].filter(Boolean).join(' · ')
         : '적금·투자 입금과 대출 원금상환'),
   ]));
+  out.push(heroCard);
 
   const months = monthSeries(12);
   const netPoints = months.map((m) => ({
     key: m.key, label: `${Number(m.key.slice(5))}월`, full: `${m.key.slice(0, 4)}년 ${Number(m.key.slice(5))}월`,
     value: store.netWorth(m.end, { excludeHidden: true }).net,
   }));
-  const netTable = withTable('dash-net', chartBox((b) => areaChart(b, netPoints, { height: 215, aria: '최근 12개월 순자산 추이' }), 215),
+  const netTable = withTable('dash-net', chartBox((b) => areaChart(b, netPoints, { height: 168, aria: '최근 12개월 순자산 추이' }), 168),
     () => dataTable(['월', '순자산'], netPoints.map((p) => [p.full, won(p.value)])));
 
   out.push(el('div', { class: 'split' }, [
@@ -313,7 +314,7 @@ function viewDashboard() {
       actions: [netTable.btn],
     }, [netTable.node]),
     card({ title: '어디에 많이 썼나', sub: periodLabel(ui.grain, ui.anchor) }, [
-      chartBox((b) => donutChart(b, rows.map((r) => ({ label: r.name, value: r.value, slot: r.slot, emoji: r.emoji })), { size: 190 }), 190),
+      chartBox((b) => donutChart(b, rows.map((r) => ({ label: r.name, value: r.value, slot: r.slot, emoji: r.emoji })), { size: 168 }), 168),
       el('div', { class: 'legend' }, rows.slice(0, 6).map((r) => el('span', { class: 'li' }, [
         el('span', { class: 'sw', style: `background:var(--s${r.slot})` }),
         `${r.name} ${((r.value / (spent || 1)) * 100).toFixed(0)}%`,
@@ -370,7 +371,7 @@ function sharedAccountCard() {
       onclick: () => { setFilter({ accountId: id, kind: 'all' }); setUi({ page: 'txns' }); },
     })],
   }, [
-    el('div', { class: 'hero-side', style: 'margin-bottom:14px' }, [
+    el('div', { class: 'hero-side', style: 'margin-bottom:8px' }, [
       el('div', { class: 'kv' }, [el('span', { class: 'k', text: '채운 돈' }), el('span', { class: 'v in', text: won(filled) })]),
       el('div', { class: 'kv' }, [el('span', { class: 'k', text: '여기서 쓴 돈' }), el('span', { class: 'v out', text: won(spent) })]),
       el('div', { class: 'kv' }, [el('span', { class: 'k', text: '옮긴 돈' }), el('span', { class: 'v', text: won(moved) }), el('span', { class: 'k', text: '카드값·상환 등' })]),
@@ -381,13 +382,13 @@ function sharedAccountCard() {
         el('span', { style: `width:${Math.min(100, ((spent + moved) / filled) * 100)}%;background:var(--accent)` }),
       ])
       : el('p', {
-        class: 'empty', style: 'padding:14px 10px',
+        class: 'empty', style: 'padding:4px 0;text-align:left',
         text: lastFilled
           ? `이번 달은 아직 채운 내역이 없어요. ${lastFilled.month}월에는 ${won(lastFilled.amount)}을 넣었어요.`
           : '이 통장으로 돈을 옮길 때 이체로 적어 두면, 이번 달 채운 돈과 쓴 돈이 여기에 보여요.',
       }),
     spent + moved > filled && filled > 0
-      ? el('p', { style: 'font-size:12px;color:var(--warn);margin:10px 0 0', text: `이번 달은 채운 돈보다 ${won(spent + moved - filled)} 더 나갔어요.` })
+      ? el('p', { style: 'font-size:12px;color:var(--warn);margin:6px 0 0', text: `이번 달은 채운 돈보다 ${won(spent + moved - filled)} 더 나갔어요.` })
       : null,
   ]);
 }
@@ -489,10 +490,10 @@ function viewTxns() {
       ]),
     ]),
     chartBox((b) => barChart(b, points, {
-      height: 140, highlightKey: ui.grain === 'day' ? ui.anchor : null,
+      height: 112, highlightKey: ui.grain === 'day' ? ui.anchor : null,
       onPick: (key) => setUi({ grain: 'day', anchor: key }),
       aria: '일자별 지출 막대 그래프',
-    }), 140),
+    }), 112),
   ]));
 
   const cats = store.config.categories.filter((c) => (f.kind === 'income' ? c.kind === 'income' : c.kind === 'expense'));
@@ -600,9 +601,9 @@ function spendingCards() {
 
   return [
     card({ title: '분류별 지출', sub: `${periodLabel(ui.grain, ui.anchor)} · 총 ${won(spent)}`, actions: [catTable.btn] }, [
-      el('div', { class: 'split' }, [
+      el('div', { class: 'split donut' }, [
         catTable.node,
-        chartBox((b) => donutChart(b, rows.map((r) => ({ label: r.name, value: r.value, slot: r.slot, emoji: r.emoji })), { size: 200 }), 200),
+        chartBox((b) => donutChart(b, rows.map((r) => ({ label: r.name, value: r.value, slot: r.slot, emoji: r.emoji })), { size: 186 }), 186),
       ]),
     ]),
     card({ title: '결제수단별', sub: '어느 통장·카드에서 나갔나' }, [
@@ -613,7 +614,7 @@ function spendingCards() {
         el('span', { class: 'li' }, [el('span', { class: 'sw', style: 'background:var(--in)' }), '수입']),
         el('span', { class: 'li' }, [el('span', { class: 'sw', style: 'background:var(--out)' }), '지출']),
       ]),
-      chartBox((b) => groupedBarChart(b, groups, { series: ['수입', '지출'], height: 190 }), 190),
+      chartBox((b) => groupedBarChart(b, groups, { series: ['수입', '지출'], height: 158 }), 158),
     ]),
   ];
 }
@@ -825,7 +826,7 @@ function viewAssets() {
   }));
   const first = points[0]?.value || 0;
   const grown = nw.net - first;
-  const t = withTable('assets-net', chartBox((b) => areaChart(b, points, { height: 235, aria: '최근 12개월 순자산 추이' }), 235),
+  const t = withTable('assets-net', chartBox((b) => areaChart(b, points, { height: 186, aria: '최근 12개월 순자산 추이' }), 186),
     () => dataTable(['월', '순자산', '전월 대비'], points.map((p, i) => [p.full, won(p.value), i ? won(p.value - points[i - 1].value) : '—'])));
 
   const groupsOrder = ['bank', 'cash', 'deposit', 'savings', 'invest', 'card', 'loan'];
@@ -858,7 +859,7 @@ function viewAssets() {
     el('div', { class: 'split' }, [
       card({ title: '계좌별 잔액', actions: [el('button', { class: 'btn sm ghost', text: '계좌 관리', onclick: () => setUi({ page: 'settings' }) })] },
         byType.map((g) => el('div', {}, [
-          el('div', { class: 'eyebrow', style: 'margin:12px 0 2px', text: ACCOUNT_TYPES[g.type].label }),
+          el('div', { class: 'eyebrow', style: 'margin:7px 0 1px', text: ACCOUNT_TYPES[g.type].label }),
           ...g.items.map((a) => {
             const v = nw.bal[a.id] || 0;
             return el('div', { class: 'acct' }, [
@@ -1315,7 +1316,7 @@ function shareCard() {
       ]),
       el('span', { class: 'hint', text: '합류가 끝나면 닫아 두세요. 닫으면 코드를 알아도 아무도 들어오거나 들여다볼 수 없어요.' }),
     ]),
-    el('p', { style: 'font-size:12px;color:var(--ink-3);margin:4px 0 14px;line-height:1.7' },
+    el('p', { style: 'font-size:12px;color:var(--ink-3);margin:2px 0 10px;line-height:1.6' },
       ['이 기기에서 그만 보고 싶을 때는 위의 ', el('b', { text: '로그아웃' }),
         ' 이면 됩니다. 같은 구글 계정으로 다시 로그인하면 초대 코드 없이 장부가 그대로 돌아와요.']),
     el('button', {
