@@ -307,7 +307,8 @@ function viewDashboard() {
   const netTable = withTable('dash-net', chartBox((b) => areaChart(b, netPoints, { height: 168, aria: '최근 12개월 순자산 추이' }), 168),
     () => dataTable(['월', '순자산'], netPoints.map((p) => [p.full, won(p.value)])));
 
-  out.push(el('div', { class: 'split' }, [
+  // 넷을 두 줄로 나란히. 한 장씩 가로로 늘어놓으면 오른쪽이 계속 빈다.
+  out.push(pair(
     card({
       title: '자산 흐름',
       sub: nw.hidden.length ? `최근 12개월 · ${nw.hidden.join(' · ')} 제외` : '최근 12개월 순자산',
@@ -320,11 +321,9 @@ function viewDashboard() {
         `${r.name} ${((r.value / (spent || 1)) * 100).toFixed(0)}%`,
       ]))),
     ]),
-  ]));
+  ));
 
-  const shared = sharedAccountCard();
-  if (shared) out.push(shared);
-  out.push(budgetCard());
+  out.push(pair(sharedAccountCard(), budgetCard()));
   out.push(card({
     title: '최근 내역',
     actions: [el('button', { class: 'btn sm ghost', text: '전체 보기 →', onclick: () => setUi({ page: 'txns' }) })],
@@ -350,6 +349,7 @@ function sharedAccountCard() {
   const spent = sum(list.filter((t) => t.kind === 'expense' && t.accountId === id), (t) => t.amount);
   const moved = sum(list.filter((t) => t.kind === 'transfer' && t.accountId === id), (t) => t.amount);
   const balance = store.balances(to)[id] || 0;
+  const recent = store.txns().filter((x) => x.accountId === id || x.toAccountId === id).slice(0, 4);
 
   const lastFilled = (() => {
     for (let back = 1; back <= 6; back += 1) {
@@ -390,7 +390,21 @@ function sharedAccountCard() {
     spent + moved > filled && filled > 0
       ? el('p', { style: 'font-size:12px;color:var(--warn);margin:6px 0 0', text: `이번 달은 채운 돈보다 ${won(spent + moved - filled)} 더 나갔어요.` })
       : null,
+    // 옆 카드 높이를 맞추느라 비는 자리를 이 통장에서 오간 돈으로 채운다
+    recent.length
+      ? el('div', { class: 'tight', style: 'margin-top:8px' }, [
+        el('div', { class: 'eyebrow', style: 'margin:0 0 2px', text: '최근 오간 돈' }),
+        ...recent.map(txnRow),
+      ])
+      : null,
   ]);
+}
+
+/** 카드 둘을 같은 폭으로 나란히. 한쪽이 없으면 남은 하나가 통째로 쓴다. */
+function pair(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  return el('div', { class: 'split even' }, [a, b]);
 }
 
 function tile(k, v, d) {

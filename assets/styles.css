@@ -170,6 +170,7 @@ button { cursor: pointer; }
 .split { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 12px; align-items: stretch; }
 /* 도넛은 제 크기만 쓰면 되니 칸을 좁게 잡아 옆의 빈 자리를 없앤다 */
 .split.donut { grid-template-columns: minmax(0, 1fr) 204px; }
+.split.even { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 /* 카드가 열 높이를 채우도록 */
 .split > .card, .split3 > * { min-width: 0; }
 /* 분류별 · 결제수단별 · 도넛을 한 줄에 */
@@ -409,7 +410,7 @@ table.data td.n { font-family: var(--font-mono); font-variant-numeric: tabular-n
   .topbar .period .btn.sm { padding: 5px 7px; font-size: 12px; }
   .topbar .spacer { display: none; }
   .view { padding: 12px 14px calc(86px + env(safe-area-inset-bottom, 0px)); gap: 10px; }
-  .split, .split.donut, .split3, .cols-2, .cols-3 { grid-template-columns: minmax(0, 1fr); }
+  .split, .split.donut, .split.even, .split3, .cols-2, .cols-3 { grid-template-columns: minmax(0, 1fr); }
   .hero { gap: 8px 14px; }
   .hero-side { gap: 6px 14px; }
   /* 폰에서는 숫자가 길어 두 칸이 한계다. 글자를 줄여 줄 수를 아낀다 */

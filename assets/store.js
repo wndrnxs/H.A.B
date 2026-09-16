@@ -610,7 +610,10 @@ class Store {
     for (const items of Object.values(this.months)) {
       for (const t of Object.values(items)) if (t && !t.deleted) out.push(t);
     }
-    out.sort((a, b) => (a.date === b.date ? (b.updatedAt || 0) - (a.updatedAt || 0) : b.date.localeCompare(a.date)));
+    // 같은 날짜 안에서는 '적은 순서' 로 줄을 세운다.
+    // updatedAt 으로 세우면 내역을 고칠 때마다 그 줄이 맨 위로 튀어 오른다.
+    const order = (x) => x.createdAt || x.updatedAt || 0;
+    out.sort((a, b) => (a.date === b.date ? order(b) - order(a) : b.date.localeCompare(a.date)));
     return out;
   }
 
@@ -710,6 +713,7 @@ class Store {
         if (this.months[month]?.[id]) continue;   // 이미 있음(지운 것 포함)
         const txn = {
           id,
+          createdAt: Date.now(),
           date,
           kind: r.kind || 'expense',
           amount: Math.abs(Math.round(r.amount)),
@@ -741,8 +745,11 @@ class Store {
   // ---- 쓰기 ----
 
   async saveTxn(input) {
+    const prev = input.id ? this.months[this.findMonth(input.id) || '']?.[input.id] : null;
     const t = {
       id: input.id || uid('t'),
+      // 처음 적은 시각. 고쳐도 그대로 두어야 목록에서 자리를 지킨다.
+      createdAt: prev?.createdAt || prev?.updatedAt || Date.now(),
       date: input.date,
       kind: input.kind,
       amount: Math.abs(Math.round(Number(input.amount) || 0)),
