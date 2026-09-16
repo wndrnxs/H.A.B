@@ -240,7 +240,7 @@ function viewDashboard() {
   const spent = sum(list.filter((t) => t.kind === 'expense'), (t) => t.amount);
   const income = sum(list.filter((t) => t.kind === 'income'), (t) => t.amount);
   const prevSpent = sum(prevList.filter((t) => t.kind === 'expense'), (t) => t.amount);
-  const nw = store.netWorth(to, { dashboard: true });
+  const nw = store.netWorth(to, { excludeHidden: true });
   const days = eachDay(from, to);
   const elapsed = Math.max(1, days.filter((d) => d <= today()).length);
   const { rows } = categoryBreakdown(list);
@@ -276,17 +276,28 @@ function viewDashboard() {
     ]),
   ]));
 
+  // 지출이 아니라 '자산 쪽으로 옮긴 돈'. 적금·투자 입금과 대출 원금상환이 여기 든다.
+  // 카드대금은 뺀다 — 그 돈은 이미 쓴 시점에 지출로 한 번 세었다.
+  const buildKinds = new Set(['savings', 'invest', 'deposit', 'loan']);
+  const built = list.filter((x) => x.kind === 'transfer' && buildKinds.has(store.account(x.toAccountId)?.type));
+  const toSavings = sum(built.filter((x) => store.account(x.toAccountId).type !== 'loan'), (x) => x.amount);
+  const toLoans = sum(built.filter((x) => store.account(x.toAccountId).type === 'loan'), (x) => x.amount);
+
   out.push(el('div', { class: 'tiles' }, [
     tile('순자산', won(nw.net), nw.hidden.length ? `${nw.hidden.join(' · ')} 제외` : '자산 − 부채'),
     tile('총자산', won(nw.assets), '통장 · 현금 · 투자'),
     tile('부채', won(nw.debts), '카드값 · 대출 남은 돈'),
     tile('건수', `${list.length}건`, `${elapsed}일 동안`),
+    tile('자산으로 돌린 돈', won(toSavings + toLoans),
+      toSavings + toLoans
+        ? [toSavings ? `적금·투자 ${wonShort(toSavings)}` : null, toLoans ? `대출 원금 ${wonShort(toLoans)}` : null].filter(Boolean).join(' · ')
+        : '적금·투자 입금과 대출 원금상환'),
   ]));
 
   const months = monthSeries(12);
   const netPoints = months.map((m) => ({
     key: m.key, label: `${Number(m.key.slice(5))}월`, full: `${m.key.slice(0, 4)}년 ${Number(m.key.slice(5))}월`,
-    value: store.netWorth(m.end, { dashboard: true }).net,
+    value: store.netWorth(m.end, { excludeHidden: true }).net,
   }));
   const netTable = withTable('dash-net', chartBox((b) => areaChart(b, netPoints, { height: 215, aria: '최근 12개월 순자산 추이' }), 215),
     () => dataTable(['월', '순자산'], netPoints.map((p) => [p.full, won(p.value)])));
@@ -607,7 +618,7 @@ function viewStats() {
  * 여기서는 그렇게 쌓인 기록을 대출별로 모아 얼마나 갚았는지 보여 준다.
  */
 function loanCard() {
-  const loans = store.config.accounts.filter((a) => ACCOUNT_TYPES[a.type]?.liability && a.type === 'loan');
+  const loans = store.visibleAccounts().filter((a) => a.type === 'loan');
   if (!loans.length) return null;
 
   const bal = store.balances();
@@ -795,11 +806,12 @@ function openRepaySheet(preset) {
 }
 
 function viewAssets() {
-  const nw = store.netWorth();
+  const nw = store.netWorth(null, { excludeHidden: true });
+  const hiddenAccounts = store.hiddenAccounts();
   const months = monthSeries(12);
   const points = months.map((m) => ({
     key: m.key, label: `${Number(m.key.slice(5))}월`, full: `${m.key.slice(0, 4)}년 ${Number(m.key.slice(5))}월`,
-    value: store.netWorth(m.end).net,
+    value: store.netWorth(m.end, { excludeHidden: true }).net,
   }));
   const first = points[0]?.value || 0;
   const grown = nw.net - first;
@@ -808,10 +820,10 @@ function viewAssets() {
 
   const groupsOrder = ['bank', 'cash', 'deposit', 'savings', 'invest', 'card', 'loan'];
   const byType = groupsOrder
-    .map((type) => ({ type, items: store.config.accounts.filter((a) => a.type === type) }))
+    .map((type) => ({ type, items: store.visibleAccounts().filter((a) => a.type === type) }))
     .filter((g) => g.items.length);
 
-  const assetAccounts = store.config.accounts
+  const assetAccounts = store.visibleAccounts()
     .filter((a) => !ACCOUNT_TYPES[a.type]?.liability)
     .map((a, i) => ({ id: a.id, name: a.name, emoji: ACCOUNT_TYPES[a.type].emoji, slot: (i % 8) + 1, value: Math.max(0, nw.bal[a.id] || 0) }))
     .filter((a) => a.value > 0)
@@ -823,7 +835,7 @@ function viewAssets() {
         el('div', { class: 'hero-main' }, [
           el('span', { class: 'eyebrow', text: '우리집 순자산' }),
           el('span', { class: 'hero-figure', text: won(nw.net) }),
-          el('span', { class: 'hero-note', text: `1년 전 대비 ${grown >= 0 ? '+' : ''}${won(grown)}` }),
+          el('span', { class: 'hero-note', text: `1년 전 대비 ${grown >= 0 ? '+' : ''}${won(grown)}${nw.hidden.length ? ` · ${nw.hidden.join(' · ')} 제외` : ''}` }),
         ]),
         el('div', { class: 'hero-side' }, [
           el('div', { class: 'kv' }, [el('span', { class: 'k', text: '자산' }), el('span', { class: 'v', text: won(nw.assets) })]),
@@ -842,7 +854,7 @@ function viewAssets() {
             return el('div', { class: 'acct' }, [
               el('span', { class: 'ico', text: ACCOUNT_TYPES[a.type].emoji }),
               el('span', { class: 'body' }, [
-                el('span', { class: 'n' }, [a.name, a.offDashboard ? el('span', { class: 'tag', text: '메인 제외' }) : null]),
+                el('span', { class: 'n' }, [a.name, a.offDashboard ? el('span', { class: 'tag', text: '숨김' }) : null]),
                 el('span', { class: 't', text: ACCOUNT_TYPES[a.type].label }),
               ]),
               el('span', { class: `b num ${v < 0 ? 'neg' : ''}`, text: won(v) }),
@@ -853,7 +865,29 @@ function viewAssets() {
         assetAccounts.length ? catBars(assetAccounts, nw.assets) : el('p', { class: 'empty', text: '계좌를 등록하면 구성이 보여요.' }),
       ]),
     ]),
+    hiddenCard(hiddenAccounts, nw.bal),
   ];
+}
+
+/** 숨겨 둔 계좌 — 위 숫자에는 안 들어가지만 어딘가에는 남아 있어야 한다 */
+function hiddenCard(accounts, bal) {
+  if (!accounts.length) return null;
+  const total = sum(accounts, (a) => bal[a.id] || 0);
+  return card({
+    title: '숨긴 계좌',
+    sub: `위 숫자에는 넣지 않았어요 · 합계 ${won(total)}`,
+    actions: [el('button', { class: 'btn sm ghost', text: '계좌 관리', onclick: () => setUi({ page: 'settings' }) })],
+  }, accounts.map((a) => {
+    const v = bal[a.id] || 0;
+    return el('div', { class: 'acct', style: 'opacity:.72' }, [
+      el('span', { class: 'ico', text: ACCOUNT_TYPES[a.type].emoji }),
+      el('span', { class: 'body' }, [
+        el('span', { class: 'n', text: a.name }),
+        el('span', { class: 't', text: ACCOUNT_TYPES[a.type].label }),
+      ]),
+      el('span', { class: `b num ${v < 0 ? 'neg' : ''}`, text: won(v) }),
+    ]);
+  }));
 }
 
 // ── 설정 ─────────────────────────────────────────────────────────────────
@@ -929,7 +963,7 @@ function viewSettings() {
 
   out.push(card({
     title: '계좌와 결제수단',
-    sub: '끌어서 순서를 바꿉니다 · 대출·카드는 남은 빚을 양수로 · 메인에서 빼고 싶은 계좌는 “메인에 표시”를 꺼요',
+    sub: '끌어서 순서를 바꿉니다 · 대출·카드는 남은 빚을 양수로 · 숫자에서 빼고 싶은 계좌는 “장부에 표시”를 꺼요',
     actions: [el('button', {
       class: 'btn sm', text: '+ 계좌',
       onclick: () => store.saveConfig({ accounts: [...cfg.accounts, { id: uid('a_'), name: '새 계좌', type: 'bank', opening: 0 }] }),
@@ -955,7 +989,7 @@ function viewSettings() {
     }),
     el('button', {
       class: 'chip', 'aria-pressed': a.offDashboard ? 'false' : 'true',
-      text: '메인에 표시', title: '대시보드의 순자산과 자산 흐름에 넣을지 정합니다',
+      text: '장부에 표시', title: '끄면 대시보드와 자산 화면의 순자산 계산에서 빠집니다. 거래 기록은 그대로 남습니다.',
       onclick: () => patchList('accounts', i, { offDashboard: !a.offDashboard }),
     }),
     el('button', {

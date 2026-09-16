@@ -642,18 +642,28 @@ class Store {
     return bal;
   }
 
+  /** '장부에 표시' 를 켜 둔 계좌만 */
+  visibleAccounts() {
+    return this.config.accounts.filter((a) => !a.offDashboard);
+  }
+
+  /** 숨겨 둔 계좌. 설정과 자산 화면 맨 아래에서만 보인다. */
+  hiddenAccounts() {
+    return this.config.accounts.filter((a) => a.offDashboard);
+  }
+
   /**
-   * 순자산. dashboard 를 켜면 '메인에 표시' 를 꺼 둔 계좌는 빼고 센다.
+   * 순자산. excludeHidden 을 켜면 숨겨 둔 계좌는 빼고 센다.
    * 전세보증금처럼 액수가 크고 움직이지 않는 것이 매달의 변화를 덮어버릴 때 쓴다.
    */
-  netWorth(asOf, { dashboard = false } = {}) {
+  netWorth(asOf, { excludeHidden = false } = {}) {
     const bal = this.balances(asOf);
     let assets = 0;
     let debts = 0;
     let hidden = [];
     // 종류가 아니라 잔고의 부호로 가른다. 마이너스 통장도, 더 낸 카드값도 이러면 맞는다.
     for (const a of this.config.accounts) {
-      if (dashboard && a.offDashboard) { hidden.push(a.name); continue; }
+      if (excludeHidden && a.offDashboard) { hidden.push(a.name); continue; }
       const v = bal[a.id] || 0;
       if (v < 0) debts += v;
       else assets += v;
