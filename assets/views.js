@@ -219,7 +219,7 @@ function catBars(rows, total, prevMap, { bars = true } = {}) {
   const max = Math.max(...rows.map((r) => r.value), 1);
   return el('div', {}, rows.map((r) => {
     const prev = prevMap?.get(r.id);
-    return el('div', { class: 'catrow' }, [
+    return el('div', { class: `catrow ${bars ? '' : 'plain'}` }, [
       el('span', { class: 'name' }, [
         el('span', { class: 'swatch', style: `background:var(--s${r.slot})` }),
         `${r.emoji} ${r.name}`,
@@ -841,9 +841,10 @@ function viewAssets() {
 
   const assetAccounts = store.visibleAccounts()
     .filter((a) => !ACCOUNT_TYPES[a.type]?.liability)
-    .map((a, i) => ({ id: a.id, name: a.name, emoji: ACCOUNT_TYPES[a.type].emoji, slot: (i % 8) + 1, value: Math.max(0, nw.bal[a.id] || 0) }))
+    .map((a) => ({ id: a.id, name: a.name, emoji: ACCOUNT_TYPES[a.type].emoji, value: Math.max(0, nw.bal[a.id] || 0) }))
     .filter((a) => a.value > 0)
-    .sort((a, b) => b.value - a.value);
+    .sort((a, b) => b.value - a.value)
+    .map((a, i) => ({ ...a, slot: (i % 8) + 1 }));
 
   return [
     card({ class: 'lift' }, [
@@ -863,7 +864,7 @@ function viewAssets() {
     loanCard(),
     el('div', { class: 'split' }, [
       card({ title: '계좌별 잔액', actions: [el('button', { class: 'btn sm ghost', text: '계좌 관리', onclick: () => setUi({ page: 'settings' }) })] },
-        byType.map((g) => el('div', {}, [
+        [el('div', { class: 'acctcols' }, byType.map((g) => el('div', { class: 'acctgroup' }, [
           el('div', { class: 'eyebrow', style: 'margin:7px 0 1px', text: ACCOUNT_TYPES[g.type].label }),
           ...g.items.map((a) => {
             const v = nw.bal[a.id] || 0;
@@ -871,15 +872,14 @@ function viewAssets() {
               el('span', { class: 'ico', text: ACCOUNT_TYPES[a.type].emoji }),
               el('span', { class: 'body' }, [
                 el('span', { class: 'n' }, [a.name, a.offDashboard ? el('span', { class: 'tag', text: '숨김' }) : null]),
-                el('span', { class: 't', text: ACCOUNT_TYPES[a.type].label }),
               ]),
               el('span', { class: `b num ${v < 0 ? 'neg' : ''}`, text: won(v) }),
             ]);
           }),
-        ]))),
+        ])))]),
       el('div', { class: 'colstack' }, [
         card({ title: '자산 구성', sub: '어디에 얼마나 들어있나' }, [
-          assetAccounts.length ? catBars(assetAccounts, nw.assets) : el('p', { class: 'empty', text: '계좌를 등록하면 구성이 보여요.' }),
+          assetAccounts.length ? donutWithList(assetAccounts, '총자산') : el('p', { class: 'empty', text: '계좌를 등록하면 구성이 보여요.' }),
         ]),
         debtCard(nw.bal),
       ]),
@@ -889,15 +889,57 @@ function viewAssets() {
   ];
 }
 
+/** 도넛으로 비중을 보이고 바로 아래에 항목과 금액을 적는다 */
+function donutWithList(rows, centerLabel) {
+  const total = sum(rows, (r) => r.value);
+  return el('div', {}, [
+    chartBox((b) => donutChart(b, rows.map((r) => ({ label: r.name, value: r.value, slot: r.slot, emoji: r.emoji })), {
+      size: 164, thickness: 22, centerLabel,
+    }), 164),
+    el('div', { style: 'margin-top:8px' }, catBars(rows, total, null, { bars: false })),
+  ]);
+}
+
 /** 빚이 어디에 얼마나 있나 — 자산 구성의 짝 */
 function debtCard(bal) {
   const rows = store.visibleAccounts()
-    .map((a, i) => ({ id: a.id, name: a.name, emoji: ACCOUNT_TYPES[a.type]?.emoji || '🧾', slot: (i % 8) + 1, value: Math.max(0, -(bal[a.id] || 0)) }))
-    .filter((r) => r.value > 0)
-    .sort((a, b) => b.value - a.value);
+    .map((a) => ({
+      id: a.id, name: a.name, type: a.type, emoji: ACCOUNT_TYPES[a.type]?.emoji || '🧾',
+      value: Math.max(0, -(bal[a.id] || 0)),
+      // 처음 빌린 금액을 안 적었으면 지금 남은 빚을 원금으로 본다(진행률 0%)
+      principal: Math.max(Number(a.principal) || 0, Math.max(0, -(bal[a.id] || 0))),
+    }))
+    .filter((r) => r.value > 0 || (r.type === 'loan' && r.principal > 0))
+    .sort((a, b) => b.value - a.value)
+    .map((r, i) => ({ ...r, slot: (i % 8) + 1, repaid: r.principal - r.value }));
   if (!rows.length) return null;
-  const total = sum(rows, (r) => r.value);
-  return card({ title: '부채 구성', sub: `갚아야 할 돈 ${won(total)}` }, [catBars(rows, total)]);
+
+  // 카드값이나 마이너스 잔고는 '갚아 나가는 빚' 이 아니라 진행률에서 뺀다
+  const loans = rows.filter((r) => r.type === 'loan');
+  const principal = sum(loans, (r) => r.principal);
+  const loanLeft = sum(loans, (r) => r.value);
+  const repaid = Math.max(0, principal - loanLeft);
+  const ratio = principal ? repaid / principal : 0;
+  const remaining = sum(rows, (r) => r.value);
+
+  if (!loans.length) {
+    return card({ title: '부채 구성', sub: `갚아야 할 돈 ${won(remaining)}` }, [catBars(rows, remaining, null, { bars: false })]);
+  }
+
+  return card({ title: '부채 구성', sub: `대출 ${wonShort(principal)} 중 ${wonShort(repaid)} 갚음` }, [
+    el('div', { class: 'progress' }, [
+      el('div', { class: 'progress-head' }, [
+        el('span', { style: 'color:var(--good);font-weight:600', text: `${(ratio * 100).toFixed(ratio > 0 && ratio < 0.1 ? 1 : 0)}% 갚음` }),
+        el('span', { class: 'spacer' }),
+        el('span', { class: 'num', style: 'color:var(--out);font-weight:600', text: `${won(loanLeft)} 남음` }),
+      ]),
+      el('span', {
+        class: 'track', role: 'img',
+        'aria-label': `전체 대출 ${won(principal)} 중 ${won(repaid)} 상환, ${Math.round(ratio * 100)}퍼센트`,
+      }, [el('span', { class: 'fill', style: `width:${ratio * 100}%;background:var(--good)` })]),
+    ]),
+    catBars(rows, remaining, null, { bars: false }),
+  ]);
 }
 
 /** 이번 기간에 크게 나간 몇 건 — 숫자만 보면 놓치는 것들 */
@@ -907,7 +949,7 @@ function bigSpendCard() {
     .sort((a, b) => b.amount - a.amount).slice(0, 5);
   if (!rows.length) return null;
   return card({ title: '크게 나간 돈', sub: `${periodLabel(ui.grain, ui.anchor)} 상위 ${rows.length}건` }, [
-    el('div', {}, rows.map((x) => el('button', { class: 'txn', onclick: () => openTxnSheet(x) }, [
+    el('div', { class: 'tight' }, rows.map((x) => el('button', { class: 'txn', onclick: () => openTxnSheet(x) }, [
       el('span', { class: 'ico', text: txnIcon(x) }),
       el('span', { class: 'body' }, [
         el('span', { class: 't1', text: txnTitle(x) }),

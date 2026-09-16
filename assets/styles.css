@@ -167,13 +167,15 @@ button { cursor: pointer; }
 .grid { display: grid; gap: 10px; }
 .cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.split { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 10px; align-items: start; }
+.split { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 12px; align-items: stretch; }
 /* 도넛은 제 크기만 쓰면 되니 칸을 좁게 잡아 옆의 빈 자리를 없앤다 */
 .split.donut { grid-template-columns: minmax(0, 1fr) 204px; }
+/* 카드가 열 높이를 채우도록 */
+.split > .card, .split3 > * { min-width: 0; }
 /* 분류별 · 결제수단별 · 도넛을 한 줄에 */
-.split3 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 186px; gap: 10px 16px; align-items: start; }
+.split3 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 186px; gap: 10px 34px; align-items: start; }
 /* 한쪽 칸이 짧아 생기는 빈자리를 카드 여럿으로 채운다 */
-.colstack { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.colstack { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 
 .eyebrow { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
 
@@ -264,6 +266,17 @@ button { cursor: pointer; }
 
 /* ── 카테고리 바 ───────────────────────────────────────────────────────── */
 .catrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 10px; padding: 5px 0; border-bottom: 1px solid var(--grid); }
+/* 막대가 없는 줄은 이름과 금액이 서로 멀어질 이유가 없다. 남는 폭은 옆 칸과의
+   사이로 돌려 보낸다. 금액 열은 오른쪽 정렬을 유지해 세로로 줄이 맞는다. */
+.catrow.plain { max-width: 300px; }
+.tight .txn { max-width: 330px; }
+/* 계좌가 많으면 한 줄씩 길게 늘어놓는 대신 두 칸으로 흘린다.
+   이름과 금액이 가까워지고 넓은 칸도 놀지 않는다. */
+/* 칸 하나가 280px 이상 확보될 때만 여러 칸으로 나뉜다 */
+.acctcols { columns: 280px; column-gap: 34px; }
+.acctgroup { break-inside: avoid-column; }
+.acct { break-inside: avoid; }
+@media (max-width: 900px) { .acctcols { columns: 1; } }
 .catrow:last-child { border-bottom: 0; }
 .catrow .name { display: flex; align-items: center; gap: 7px; font-size: 13.5px; min-width: 0; }
 .catrow .name .swatch { width: 9px; height: 9px; border-radius: 3px; flex: none; }
@@ -274,6 +287,11 @@ button { cursor: pointer; }
 
 .stack { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--grid); gap: 2px; }
 .stack span { display: block; height: 100%; min-width: 2px; }
+.progress { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; }
+.progress-head { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; }
+.progress-head .spacer { flex: 1; }
+.progress .track { height: 9px; border-radius: 5px; background: var(--grid); overflow: hidden; display: block; }
+.progress .fill { display: block; height: 100%; border-radius: 5px; min-width: 2px; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; }
 .legend .li { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
 .legend .sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
@@ -304,7 +322,7 @@ table.data td.n { font-family: var(--font-mono); font-variant-numeric: tabular-n
 .acct { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--grid); }
 .acct:last-child { border-bottom: 0; }
 .acct .ico { width: 30px; height: 30px; border-radius: 10px; background: var(--surface-2); display: grid; place-items: center; font-size: 15px; }
-.acct .body { flex: 1; min-width: 0; }
+.acct .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .acct .n { font-size: 14px; font-weight: 500; }
 .acct .t { font-size: 11.5px; color: var(--ink-3); }
 .acct .b { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-weight: 600; }
