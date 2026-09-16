@@ -801,7 +801,7 @@ function viewSettings() {
     local: '이 장부는 이 브라우저에 저장됩니다',
   }[store.status];
   out.push(card({ title: '데이터', sub: whereText }, [
-    el('p', { class: 'hint', style: 'font-size:12.5px;color:var(--ink-3);margin:0 0 12px' , text: `거래 ${store.txns().length}건 · 분류 ${cfg.categories.length}개 · 계좌 ${cfg.accounts.length}개` }),
+    el('p', { class: 'hint', style: 'font-size:12.5px;color:var(--ink-3);margin:0 0 12px', text: `거래 ${store.txns().length}건 · 분류 ${cfg.categories.length}개 · 계좌 ${cfg.accounts.length}개 · 순자산 ${won(store.netWorth().net)}` }),
     el('div', { class: 'quick' }, [
       el('button', {
         class: 'btn', text: '백업 복사',
@@ -830,10 +830,15 @@ function viewSettings() {
       }) : null,
       el('button', {
         class: 'btn danger', text: '전부 지우고 새로 시작',
-        onclick: () => confirmThen('모든 내역과 설정을 지웁니다. 되돌릴 수 없어요. 계속할까요?', async () => {
-          await store.resetAll();
-          toast('처음 상태로 되돌렸어요');
-        }),
+        onclick: () => confirmThen(
+          store.status === 'firebase'
+            ? '모든 거래와 계좌 잔액을 지우고 처음 상태로 되돌립니다. 함께 쓰는 중이라 상대방 화면에서도 사라지고, 되돌릴 수 없어요. 계속할까요?'
+            : '모든 거래를 지우고 계좌 잔액을 0원으로 되돌립니다. 되돌릴 수 없어요. 계속할까요?',
+          async () => {
+            await store.resetAll();
+            toast('처음 상태로 되돌렸어요');
+          },
+        ),
       }),
     ]),
     el('div', { id: 'backup-box' }),
@@ -877,7 +882,13 @@ function shareCard() {
   const who = el('div', { class: 'listline', style: 'border:0;padding:0 0 12px' }, [
     el('span', { class: 'sync-pill' }, [el('span', { class: 'sync-dot' }), s.user.email || s.user.name || '로그인됨']),
     el('span', { class: 'spacer' }),
-    el('button', { class: 'btn sm ghost', text: '로그아웃', disabled: busy, onclick: () => store.shareSignOut() }),
+    el('button', {
+      class: 'btn sm ghost', text: '로그아웃', disabled: busy,
+      onclick: () => confirmThen(
+        '로그아웃하면 이 기기에 있던 사본이 지워집니다. 장부는 서버에 그대로 있으니 다시 로그인하면 돌아와요.',
+        () => store.shareSignOut(),
+      ),
+    }),
   ]);
 
   // 3. 로그인은 했는데 아직 가계부가 없음
@@ -938,7 +949,7 @@ function shareCard() {
     el('button', {
       class: 'btn danger', style: 'align-self:flex-start', disabled: busy,
       text: '이 기기 연결 끊기',
-      onclick: () => confirmThen('이 기기만 연결을 끊습니다. 장부는 서버에 그대로 남고, 다시 로그인하면 이어서 쓸 수 있어요.', () => store.shareDisconnect()),
+      onclick: () => confirmThen('이 기기만 연결을 끊고 여기 남은 사본을 지웁니다. 장부는 서버에 그대로 남아서, 다시 로그인하면 이어서 쓸 수 있어요.', () => store.shareDisconnect()),
     }),
   ]);
 }

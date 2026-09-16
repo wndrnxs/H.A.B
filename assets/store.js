@@ -70,6 +70,20 @@ function defaultConfig() {
   };
 }
 
+/**
+ * '전부 지우고 새로 시작' 이 만드는 장부.
+ * 분류·계좌·구성원 틀은 남기되 금액은 전부 0 으로 비운다. defaultConfig 를 그대로
+ * 쓰면 예시용 시작 잔액(전세보증금 2.2억 같은)이 되살아나 초기화가 안 된 것처럼 보인다.
+ */
+export function emptyConfig() {
+  const base = defaultConfig();
+  return {
+    ...base,
+    settings: { ...base.settings, openingDate: startOfMonth(today()) },
+    accounts: base.accounts.map((a) => ({ ...a, opening: 0 })),
+  };
+}
+
 // ---------------------------------------------------------------- 예시 데이터
 
 function mulberry32(a) {
@@ -457,7 +471,11 @@ class Store {
     this.emit();
   }
 
-  /** 로그아웃 — 보던 장부를 이 브라우저에 남겨 두고 혼자 쓰기로 돌아간다 */
+  /**
+   * 로그아웃 — 이 기기에 남은 사본을 지운다.
+   * 장부는 서버에 그대로 있으니 다시 로그인하면 돌아온다. 남의 폰이나 공용 PC 에서
+   * 로그아웃했는데 우리집 지출이 계속 보이면 안 된다.
+   */
   async detachFirebase() {
     if (this.unsub) { this.unsub(); this.unsub = null; }
     this.adapter = localAdapter;
@@ -465,7 +483,9 @@ class Store {
     this.share.householdId = null;
     this.share.members = 0;
     this.share.joinOpen = false;
-    await this.persist();
+    this.share.ownerUid = null;
+    await localAdapter.clear();
+    this.apply({ config: emptyConfig(), months: {} });
     this.emit();
   }
 
@@ -689,7 +709,7 @@ class Store {
   }
 
   async resetAll() {
-    await this.replaceAll({ config: defaultConfig(), months: {} });
+    await this.replaceAll({ config: emptyConfig(), months: {} });
   }
 
   exportData() {
