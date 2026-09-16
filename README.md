@@ -57,7 +57,7 @@ npx http-server . -p 8080     # 또는 python3 -m http.server 8080
 
 ### 2. 설정값 넣기
 
-복사한 값을 `assets/firebase-config.js` 에 붙여넣고 올립니다.
+복사한 값을 `assets/firebase-config.js` 에 붙여넣고 올립니다. (이 저장소는 `house-ab` 프로젝트로 이미 채워져 있습니다.)
 
 ```js
 export const firebaseConfig = {
@@ -78,9 +78,10 @@ export const firebaseConfig = {
 ```bash
 npm i -g firebase-tools
 firebase login
-firebase use <프로젝트-ID>
 firebase deploy --only firestore:rules
 ```
+
+프로젝트(`house-ab`)는 `.firebaserc` 에 적어 뒀으니 `firebase use` 는 생략해도 됩니다.
 
 `firestore.rules` 는 **로그인한 우리 가족만 우리 장부를 읽고 쓰도록** 막아 둡니다.
 콘솔의 Firestore → 규칙 탭에 파일 내용을 붙여넣어도 됩니다.
@@ -88,6 +89,7 @@ firebase deploy --only firestore:rules
 ### 4. 주소 등록
 
 - **Firebase Hosting 으로 배포한다면** (`firebase deploy --only hosting`) 추가 설정이 없습니다.
+  주소는 <https://house-ab.web.app> 이 됩니다.
 - **GitHub Pages 를 쓴다면** 콘솔 → Authentication → 설정 → **승인된 도메인** 에
   `wndrnxs.github.io` 를 추가해야 로그인이 됩니다.
 
