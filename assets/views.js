@@ -26,9 +26,8 @@ export function setFilter(patch) { Object.assign(ui.filter, patch); rerender(); 
 
 export const PAGES = [
   { id: 'dashboard', name: '대시보드', icon: '◎' },
-  { id: 'txns', name: '내역', icon: '☰' },
-  { id: 'stats', name: '통계', icon: '◔' },
   { id: 'assets', name: '자산', icon: '▤' },
+  { id: 'txns', name: '내역', icon: '☰' },
   { id: 'settings', name: '설정', icon: '⚙' },
 ];
 
@@ -165,7 +164,11 @@ function txnRow(t) {
   return el('button', { class: 'txn', onclick: () => openTxnSheet(t) }, [
     el('span', { class: 'ico', text: txnIcon(t) }),
     el('span', { class: 'body' }, [
-      el('span', { class: 't1' }, [txnTitle(t), t.sample ? el('span', { class: 'tag', text: '예시' }) : null]),
+      el('span', { class: 't1' }, [
+        txnTitle(t),
+        t.recurringId ? el('span', { class: 'tag', text: '고정' }) : null,
+        t.sample ? el('span', { class: 'tag', text: '예시' }) : null,
+      ]),
       el('span', { class: 't2', text: txnSub(t) }),
     ]),
     el('span', { class: `amt num ${t.kind === 'income' ? 'in' : t.kind === 'transfer' ? 'tr' : 'out'}`, text: `${sign}${wonPlain(t.amount)}` }),
@@ -210,7 +213,8 @@ function categoryBreakdown(list, limit = 8) {
   return { rows, all };
 }
 
-function catBars(rows, total, prevMap) {
+/** bars 를 끄면 금액만 적는다. 비중은 옆의 도넛과 '표로 보기' 가 맡는다. */
+function catBars(rows, total, prevMap, { bars = true } = {}) {
   if (!rows.length) return el('p', { class: 'empty', text: '지출 내역이 없어요.' });
   const max = Math.max(...rows.map((r) => r.value), 1);
   return el('div', {}, rows.map((r) => {
@@ -221,11 +225,11 @@ function catBars(rows, total, prevMap) {
         `${r.emoji} ${r.name}`,
       ]),
       el('span', { class: 'val num', text: wonPlain(r.value) }),
-      el('span', { class: 'track' }, [el('span', { class: 'fill', style: `width:${(r.value / max) * 100}%;background:var(--s${r.slot})` })]),
-      el('span', { class: 'meta' }, [
+      bars ? el('span', { class: 'track' }, [el('span', { class: 'fill', style: `width:${(r.value / max) * 100}%;background:var(--s${r.slot})` })]) : null,
+      bars ? el('span', { class: 'meta' }, [
         el('span', { text: `${((r.value / (total || 1)) * 100).toFixed(1)}%` }),
         prev !== undefined ? deltaTag(r.value, prev) : null,
-      ]),
+      ]) : null,
     ]);
   }));
 }
@@ -557,7 +561,11 @@ function monthSeries(n) {
   return kept.length >= 2 ? kept : months.slice(-Math.min(3, months.length));
 }
 
-function viewStats() {
+/**
+ * 지출 분석 — 예전 '통계' 화면의 내용이다. 메뉴를 넷으로 줄이면서 자산 화면으로 옮겼다.
+ * 분류별과 결제수단별은 막대를 빼고 금액만 적는다. 비중은 도넛과 표가 맡는다.
+ */
+function spendingCards() {
   const { from, to } = periodRange(ui.grain, ui.anchor);
   const prev = comparePrev(ui.grain, ui.anchor);
   const list = store.inRange(from, to);
@@ -567,10 +575,13 @@ function viewStats() {
   const prevBreak = categoryBreakdown(store.inRange(prev.from, prev.to), 99);
   const prevMap = new Map(prevBreak.all.map((r) => [r.id, r.value]));
 
-  const catTable = withTable('stats-cat', catBars(rows, spent, prevMap),
-    () => dataTable(['분류', '금액', '비중'], all.map((r) => [`${r.emoji} ${r.name}`, won(r.value), `${((r.value / (spent || 1)) * 100).toFixed(1)}%`])));
+  const catTable = withTable('stats-cat', catBars(rows, spent, prevMap, { bars: false }),
+    () => dataTable(['분류', '금액', '비중', '지난 기간'], all.map((r) => [
+      `${r.emoji} ${r.name}`, won(r.value), `${((r.value / (spent || 1)) * 100).toFixed(1)}%`,
+      prevMap.has(r.id) ? won(prevMap.get(r.id)) : '—',
+    ])));
 
-  const byAccount = store.config.accounts.map((a, i) => ({
+  const byAccount = store.visibleAccounts().map((a, i) => ({
     id: a.id, name: a.name, emoji: ACCOUNT_TYPES[a.type]?.emoji || '💳', slot: (i % 8) + 1,
     value: sum(list.filter((t) => t.kind === 'expense' && t.accountId === a.id), (t) => t.amount),
   })).filter((a) => a.value > 0).sort((a, b) => b.value - a.value);
@@ -588,7 +599,6 @@ function viewStats() {
   });
 
   return [
-    // 도넛으로 비율을, 옆 목록으로 금액과 증감을 본다. 목록의 색칩이 곧 범례다.
     card({ title: '분류별 지출', sub: `${periodLabel(ui.grain, ui.anchor)} · 총 ${won(spent)}`, actions: [catTable.btn] }, [
       el('div', { class: 'split' }, [
         catTable.node,
@@ -596,7 +606,7 @@ function viewStats() {
       ]),
     ]),
     card({ title: '결제수단별', sub: '어느 통장·카드에서 나갔나' }, [
-      byAccount.length ? catBars(byAccount, spent) : el('p', { class: 'empty', text: '지출 내역이 없어요.' }),
+      byAccount.length ? catBars(byAccount, spent, null, { bars: false }) : el('p', { class: 'empty', text: '지출 내역이 없어요.' }),
     ]),
     card({ title: '월별 수입과 지출', sub: '최근 12개월' }, [
       el('div', { class: 'legend', style: 'margin:0 0 6px' }, [
@@ -865,6 +875,7 @@ function viewAssets() {
         assetAccounts.length ? catBars(assetAccounts, nw.assets) : el('p', { class: 'empty', text: '계좌를 등록하면 구성이 보여요.' }),
       ]),
     ]),
+    ...spendingCards(),
     hiddenCard(hiddenAccounts, nw.bal),
   ];
 }
@@ -891,6 +902,103 @@ function hiddenCard(accounts, bal) {
 }
 
 // ── 설정 ─────────────────────────────────────────────────────────────────
+
+/** 매달 자동으로 적히는 항목 하나를 만들거나 고친다 */
+function openRecurringSheet(existing) {
+  const cats = () => store.config.categories;
+  const draft = existing ? { ...existing } : {
+    id: uid('rc_'), name: '', amount: '', kind: 'expense',
+    categoryId: cats().find((c) => c.kind === 'expense')?.id || null,
+    accountId: store.config.accounts[0]?.id || null,
+    toAccountId: store.config.accounts[1]?.id || null,
+    day: 1, active: true, lastRun: null,
+  };
+  let backfill = !existing;
+  const body = el('div', {});
+
+  const draw = () => {
+    const kindCats = cats().filter((c) => c.kind === draft.kind);
+    if (draft.kind !== 'transfer' && !kindCats.some((c) => c.id === draft.categoryId)) draft.categoryId = kindCats[0]?.id || null;
+    body.replaceChildren(
+      el('div', { class: 'picker', style: 'margin-bottom:14px' }, [
+        ['expense', '지출'], ['income', '수입'], ['transfer', '이체'],
+      ].map(([k, n]) => el('button', {
+        'aria-pressed': draft.kind === k ? 'true' : 'false', text: n,
+        onclick: () => { draft.kind = k; draw(); },
+      }))),
+      el('div', { class: 'field' }, [
+        el('label', { for: 'rc-name', text: '이름' }),
+        el('input', {
+          id: 'rc-name', type: 'text', value: draft.name, placeholder: '예: 월세, 통신비, 적금 자동이체',
+          oninput: (e) => { draft.name = e.target.value; },
+        }),
+      ]),
+      el('div', { class: 'row2' }, [
+        el('div', { class: 'field amount' }, [
+          el('label', { text: '금액 (원)' }),
+          moneyInput({ value: draft.amount === '' ? null : draft.amount, placeholder: '0', label: '금액', onCommit: (v) => { draft.amount = v ?? ''; } }),
+        ]),
+        el('div', { class: 'field' }, [
+          el('label', { for: 'rc-day', text: '매월 며칠' }),
+          el('select', { id: 'rc-day', onchange: (e) => { draft.day = Number(e.target.value); } },
+            Array.from({ length: 31 }, (_, i) => el('option', { value: i + 1, text: `${i + 1}일`, selected: draft.day === i + 1 }))),
+          el('span', { class: 'hint', text: '없는 날이면 그 달 마지막 날에 적혀요.' }),
+        ]),
+      ]),
+      el('div', { class: 'field' }, [
+        el('label', { for: 'rc-acct', text: draft.kind === 'transfer' ? '보내는 계좌' : '결제수단' }),
+        el('select', { id: 'rc-acct', onchange: (e) => { draft.accountId = e.target.value; } },
+          store.config.accounts.map((a) => el('option', { value: a.id, text: a.name, selected: draft.accountId === a.id }))),
+      ]),
+      draft.kind === 'transfer'
+        ? el('div', { class: 'field' }, [
+          el('label', { for: 'rc-to', text: '받는 계좌' }),
+          el('select', { id: 'rc-to', onchange: (e) => { draft.toAccountId = e.target.value; } },
+            store.config.accounts.map((a) => el('option', { value: a.id, text: a.name, selected: draft.toAccountId === a.id }))),
+        ])
+        : el('div', { class: 'field' }, [
+          el('label', { text: '분류' }),
+          el('div', { class: 'picker' }, kindCats.map((c) => el('button', {
+            'aria-pressed': draft.categoryId === c.id ? 'true' : 'false', text: `${c.emoji} ${c.name}`,
+            onclick: () => { draft.categoryId = c.id; draw(); },
+          }))),
+        ]),
+      existing ? null : el('div', { class: 'banner' }, [
+        el('label', { style: 'display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer' }, [
+          el('input', { type: 'checkbox', checked: backfill, onchange: (e) => { backfill = e.target.checked; } }),
+          '이번 달 것부터 적기',
+        ]),
+      ]),
+    );
+  };
+  draw();
+
+  const save = async () => {
+    if (!draft.name.trim()) { toast('이름을 넣어 주세요'); return; }
+    if (!draft.amount || Number(draft.amount) <= 0) { toast('금액을 넣어 주세요'); return; }
+    if (draft.kind === 'transfer' && draft.accountId === draft.toAccountId) { toast('보내는 계좌와 받는 계좌가 같아요'); return; }
+    const item = { ...draft, name: draft.name.trim(), amount: Number(draft.amount) };
+    if (!existing) item.lastRun = backfill ? monthKey(addMonths(today(), -1)) : monthKey(today());
+    const list = existing
+      ? store.config.recurring.map((r) => (r.id === item.id ? item : r))
+      : [...(store.config.recurring || []), item];
+    await store.saveConfig({ recurring: list });
+    const made = await store.runRecurring();
+    closeSheet();
+    toast(made ? `저장했어요 · ${made}건을 적었어요` : '저장했어요');
+  };
+
+  openSheet(existing ? '고정 내역 고치기' : '고정 내역 만들기', [body], [
+    el('button', { class: 'btn primary', text: '저장', onclick: save }),
+  ], existing ? [el('button', {
+    class: 'btn danger', text: '삭제',
+    onclick: () => confirmThen('이 고정 내역을 지울까요? 이미 적힌 기록은 그대로 남아요.', async () => {
+      await store.saveConfig({ recurring: store.config.recurring.filter((r) => r.id !== existing.id) });
+      closeSheet();
+      toast('고정 내역을 지웠어요');
+    }),
+  })] : []);
+}
 
 function viewSettings() {
   const cfg = store.config;
@@ -926,6 +1034,29 @@ function viewSettings() {
       }))),
     ]),
   ]));
+
+  const rec = store.config.recurring || [];
+  out.push(card({
+    title: '고정지출 자동 등록',
+    sub: '매달 정해진 날이 되면 알아서 적혀요 · 급여나 자동이체도 넣을 수 있어요',
+    actions: [el('button', { class: 'btn sm', text: '+ 추가', onclick: () => openRecurringSheet(null) })],
+  }, rec.length ? [sortableList('recurring', rec, (r) => el('div', { class: 'listline' }, [
+    el('button', {
+      class: 'chip', 'aria-pressed': r.active ? 'true' : 'false',
+      text: r.active ? '켬' : '끔', title: '끄면 다음 달부터 적히지 않아요',
+      onclick: () => store.saveConfig({
+        recurring: store.config.recurring.map((x) => (x.id === r.id ? { ...x, active: !x.active } : x)),
+      }),
+    }),
+    el('button', {
+      class: 'btn sm ghost', style: 'flex:1;justify-content:flex-start;text-align:left',
+      text: `${r.name || '이름 없음'}`, onclick: () => openRecurringSheet(r),
+    }),
+    el('span', { class: 'tag', text: `매월 ${r.day}일` }),
+    el('span', { class: 'spacer' }),
+    el('span', { class: 'num', style: `font-weight:600;color:var(--${r.kind === 'income' ? 'in' : r.kind === 'transfer' ? 'ink-3' : 'out'})`, text: won(r.amount) }),
+    el('button', { class: 'btn sm', text: '고치기', onclick: () => openRecurringSheet(r) }),
+  ]))] : [el('p', { class: 'empty', text: '월세·통신비·보험료처럼 매달 같은 날 나가는 것을 넣어 두면 직접 적지 않아도 돼요.' })]));
 
   out.push(card({
     title: '분류와 예산',
@@ -1520,7 +1651,6 @@ export function toast(message) {
 export function renderPage() {
   switch (ui.page) {
     case 'txns': return viewTxns();
-    case 'stats': return viewStats();
     case 'assets': return viewAssets();
     case 'settings': return viewSettings();
     default: return viewDashboard();

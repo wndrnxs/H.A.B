@@ -36,7 +36,8 @@ function periodControls() {
 
 function render() {
   const page = PAGES.find((p) => p.id === ui.page) || PAGES[0];
-  const showPeriod = ['dashboard', 'txns', 'stats'].includes(ui.page);
+  // 자산 화면에도 지출 분석이 들어가서 기간을 옮길 수 있어야 한다
+  const showPeriod = ['dashboard', 'txns', 'assets'].includes(ui.page);
 
   const rail = el('aside', { class: 'rail' }, [
     el('div', { class: 'brand' }, [

@@ -30,6 +30,8 @@ function defaultConfig() {
       startPage: 'dashboard',
       sharedAccountId: 'a_living',
     },
+    // 매달 같은 날 자동으로 적히는 항목들
+    recurring: [],
     // 지출을 사람별로 나누는 기능은 걷어냈다(통장을 사람별로 나눠 쓰기로 했다).
     // 이미 서버에 올라간 장부와 옛 기록이 이 항목을 갖고 있어 자리만 남겨 둔다.
     members: [
@@ -388,6 +390,7 @@ class Store {
           const hid = await this.findHousehold(user);
           if (hid) {
             await this.attachFirebase(hid, 'member');
+            await this.runRecurring().catch(() => {});
             this.ready = true;
             this.watchAuth().catch(() => {});
             this.emit();
@@ -432,6 +435,7 @@ class Store {
     } else {
       await this.persist();
     }
+    await this.runRecurring().catch(() => {});
     this.ready = true;
     if (this.share.available) this.watchAuth().catch(() => {});
     this.emit();
@@ -671,6 +675,69 @@ class Store {
     return { assets, debts, net: assets + debts, bal, hidden };
   }
 
+  // ---- 고정 내역 자동 등록 ----
+
+  /**
+   * 매달 정해진 날이 지나면 알아서 적는다.
+   *
+   * 거래 id 를 `r_<항목>_<YYYY-MM>` 으로 정해 둔다. 두 사람이 같은 시각에 앱을
+   * 열어도 같은 id 로 쓰기 때문에 한 건으로 합쳐지고 두 번 적히지 않는다.
+   * lastRun 은 어디까지 만들었는지 표시다. 사용자가 지운 내역을 다시 만들어
+   * 내지 않으려면 이 표시가 필요하다.
+   */
+  async runRecurring() {
+    const items = this.config.recurring || [];
+    if (!items.length) return 0;
+    const now = today();
+    const thisMonth = monthKey(now);
+    let made = 0;
+    const nextItems = items.map((r) => ({ ...r }));
+
+    for (const r of nextItems) {
+      if (!r.active || !r.amount) continue;
+      // 최대 12개월치까지만 거슬러 만든다. 오래 안 열었다고 몇 년치가 쏟아지면 곤란하다
+      let cursor = r.lastRun || monthKey(addMonths(now, -1));
+      for (let guard = 0; guard < 12; guard += 1) {
+        const month = monthKey(addMonths(`${cursor}-01`, 1));
+        if (month > thisMonth) break;
+        const [y, m] = month.split('-').map(Number);
+        const date = `${month}-${pad(Math.min(r.day || 1, daysInMonth(y, m)))}`;
+        // 아직 그 날이 안 왔으면 표시를 옮기지 않는다.
+        // 옮겨 두면 날이 됐을 때 그 달을 통째로 건너뛴다.
+        if (date > now) break;
+        cursor = month;
+        const id = `r_${r.id}_${month}`;
+        if (this.months[month]?.[id]) continue;   // 이미 있음(지운 것 포함)
+        const txn = {
+          id,
+          date,
+          kind: r.kind || 'expense',
+          amount: Math.abs(Math.round(r.amount)),
+          categoryId: r.kind === 'transfer' ? null : r.categoryId || null,
+          accountId: r.accountId || null,
+          toAccountId: r.kind === 'transfer' ? r.toAccountId || null : null,
+          memberId: null,
+          loanId: null,
+          memo: r.name || '고정 내역',
+          recurringId: r.id,
+          sample: false,
+          updatedAt: Date.now(),
+        };
+        (this.months[month] ||= {})[id] = txn;
+        await this.writeMonth(month, { [id]: txn });
+        made += 1;
+      }
+      r.lastRun = cursor;
+    }
+
+    if (made) {
+      await this.saveConfig({ recurring: nextItems });
+    } else if (JSON.stringify(nextItems) !== JSON.stringify(items)) {
+      await this.saveConfig({ recurring: nextItems });
+    }
+    return made;
+  }
+
   // ---- 쓰기 ----
 
   async saveTxn(input) {
@@ -685,6 +752,7 @@ class Store {
       memberId: input.memberId || null,
       // 이자 지출이 어느 대출에 대한 것인지. 대출별 낸 이자 합계를 내는 데 쓴다.
       loanId: input.loanId || null,
+      recurringId: input.recurringId || null,
       memo: (input.memo || '').trim(),
       sample: false,
       updatedAt: Date.now(),
@@ -772,6 +840,7 @@ function migrate(config) {
   return {
     settings: { ...base.settings, ...(config.settings || {}) },
     members: config.members?.length ? config.members : base.members,
+    recurring: config.recurring || [],
     accounts: config.accounts?.length ? config.accounts : base.accounts,
     categories: config.categories?.length ? config.categories : base.categories,
   };
