@@ -342,14 +342,20 @@ class Store {
       this.status = 'cloud';
     }
     let loaded = await this.adapter.load();
+    let needsSeed = false;
     if (!loaded && this.status === 'cloud') {
       // 클라우드가 비어 있으면 이 기기에 있던 장부를 그대로 올린다
       loaded = await localAdapter.load();
+      needsSeed = !!loaded;
     }
-    if (!loaded) loaded = buildSampleData();
+    if (!loaded) {
+      loaded = buildSampleData();
+      needsSeed = true;
+    }
     this.apply(loaded);
     if (this.status === 'cloud') {
-      await this.pushAll();
+      // 이미 클라우드에 있던 장부를 그대로 다시 올리지 않는다 (다른 기기의 입력을 덮어쓸 수 있다)
+      if (needsSeed) await this.pushAll();
       this.adapter.subscribe(
         (config) => { if (config) { this.config = migrate(config); this.emit(); } },
         (months) => { this.months = months; this.emit(); },

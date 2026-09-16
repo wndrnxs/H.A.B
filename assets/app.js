@@ -95,7 +95,7 @@ store.init().then(() => {
 });
 
 // 홈 화면에 추가했을 때 오프라인으로도 열리도록 — 정적 호스팅에서만 동작한다
-if ('serviceWorker' in navigator && location.protocol === 'https:') {
+if ('serviceWorker' in navigator && location.protocol === 'https:' && !window.claude) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register(new URL('../sw.js', import.meta.url)).catch(() => {});
   });
