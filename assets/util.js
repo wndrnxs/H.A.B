@@ -140,12 +140,18 @@ export function wonShort(n) {
   const v = Math.round(n || 0);
   const a = Math.abs(v);
   const sign = v < 0 ? '-' : '';
-  if (a >= 100000000) return `${sign}${trim(a / 100000000)}억`;
+  // 억 단위는 소수 둘째 자리까지 — 1.02억과 1.04억이 둘 다 '1억'으로 보이면 축이 무용지물이다
+  if (a >= 100000000) return `${sign}${trim2(a / 100000000)}억`;
   // 1,000만 이상은 소수점을 떼야 읽힌다 (3,082만 > 3081.7만)
   if (a >= 10000000) return `${sign}${nf.format(Math.round(a / 10000))}만`;
   if (a >= 10000) return `${sign}${trim(a / 10000)}만`;
   if (a === 0) return '0';
   return `${sign}${nf.format(a)}`;
+}
+
+function trim2(x) {
+  const r = Math.round(x * 100) / 100;
+  return Number.isInteger(r) ? String(r) : String(r).replace(/0$/, '');
 }
 
 function trim(x) {

@@ -12,9 +12,11 @@ const LS_KEY = 'hab.ledger.v1';
 export const ACCOUNT_TYPES = {
   bank: { label: '입출금', emoji: '🏦', liability: false },
   cash: { label: '현금', emoji: '💵', liability: false },
-  card: { label: '신용카드', emoji: '💳', liability: true },
+  // 전세·월세 보증금은 계약이 끝나면 돌려받는 돈이라 자산이다
+  deposit: { label: '보증금', emoji: '🔑', liability: false },
   savings: { label: '적금·예금', emoji: '🐖', liability: false },
   invest: { label: '투자', emoji: '📈', liability: false },
+  card: { label: '신용카드', emoji: '💳', liability: true },
   loan: { label: '대출', emoji: '🧾', liability: true },
 };
 
@@ -25,6 +27,7 @@ function defaultConfig() {
       household: '우리집 가계부',
       openingDate: opening,
       startPage: 'dashboard',
+      sharedAccountId: 'a_living',
     },
     members: [
       { id: 'm_me', name: '나', emoji: '🙋', slot: 1 },
@@ -34,16 +37,19 @@ function defaultConfig() {
     accounts: [
       { id: 'a_salary1', name: '내 급여통장', type: 'bank', opening: 4200000 },
       { id: 'a_salary2', name: '신부 급여통장', type: 'bank', opening: 3100000 },
-      { id: 'a_living', name: '생활비 통장', type: 'bank', opening: 1500000 },
+      { id: 'a_living', name: '공동 생활비 통장', type: 'bank', opening: 2000000 },
       { id: 'a_card', name: '신용카드', type: 'card', opening: 0 },
       { id: 'a_cash', name: '현금', type: 'cash', opening: 180000 },
       { id: 'a_savings', name: '적금·청약', type: 'savings', opening: 12400000 },
       { id: 'a_invest', name: '주식·ETF', type: 'invest', opening: 8600000 },
+      { id: 'a_deposit', name: '전세보증금', type: 'deposit', opening: 220000000 },
+      { id: 'a_jeonse', name: '전세자금대출', type: 'loan', opening: -150000000 },
     ],
     categories: [
       { id: 'c_food', name: '식비', emoji: '🍚', kind: 'expense', budget: 700000 },
       { id: 'c_cafe', name: '카페·간식', emoji: '☕', kind: 'expense', budget: 150000 },
-      { id: 'c_home', name: '주거·관리비', emoji: '🏠', kind: 'expense', budget: 900000 },
+      { id: 'c_home', name: '주거·관리비', emoji: '🏠', kind: 'expense', budget: 300000 },
+      { id: 'c_loan', name: '대출이자', emoji: '💸', kind: 'expense', budget: 450000 },
       { id: 'c_living', name: '생필품', emoji: '🧻', kind: 'expense', budget: 200000 },
       { id: 'c_tel', name: '통신', emoji: '📱', kind: 'expense', budget: 120000 },
       { id: 'c_move', name: '교통·차량', emoji: '🚌', kind: 'expense', budget: 250000 },
@@ -113,8 +119,9 @@ function sampleTxns(config) {
     if (mOff === -1) push(day(25), 'income', 1500000, { categoryId: 'i_bonus', accountId: 'a_salary1', memberId: 'm_me', memo: '분기 성과급' });
     push(day(21), 'income', between(9000, 24000, 10), { categoryId: 'i_interest', accountId: 'a_savings', memo: '예금 이자' });
 
-    // 고정 지출
-    push(day(1), 'expense', 850000, { categoryId: 'c_home', accountId: 'a_living', memo: '월세' });
+    // 고정 지출 — 전세는 '이자만 지출, 원금상환은 이체'로 적는다
+    push(day(25), 'expense', between(425000, 445000, 10), { categoryId: 'c_loan', accountId: 'a_living', memo: '전세자금대출 이자' });
+    push(day(25), 'transfer', 300000, { accountId: 'a_living', toAccountId: 'a_jeonse', memo: '전세대출 원금상환' });
     push(day(5), 'expense', between(120000, 210000, 1000), { categoryId: 'c_home', accountId: 'a_living', memo: '관리비·공과금' });
     push(day(12), 'expense', 55000, { categoryId: 'c_tel', accountId: 'a_living', memberId: 'm_me', memo: '휴대폰 요금' });
     push(day(12), 'expense', 49000, { categoryId: 'c_tel', accountId: 'a_living', memberId: 'm_partner', memo: '휴대폰 요금' });
@@ -123,7 +130,9 @@ function sampleTxns(config) {
     push(day(17), 'expense', 39000, { categoryId: 'c_insure', accountId: 'a_living', memberId: 'm_dog', memo: '펫보험' });
     push(day(26), 'transfer', 800000, { accountId: 'a_salary1', toAccountId: 'a_savings', memo: '적금 자동이체' });
     push(day(26), 'transfer', 500000, { accountId: 'a_salary2', toAccountId: 'a_invest', memo: '적립식 ETF' });
-    push(day(27), 'transfer', 1600000, { accountId: 'a_salary1', toAccountId: 'a_living', memo: '생활비 이체' });
+    // 공동 통장 분담금 — 누가 넣었는지 남겨 두면 통계에서 분담 비율이 보인다
+    push(day(27), 'transfer', 1700000, { accountId: 'a_salary1', toAccountId: 'a_living', memberId: 'm_me', memo: '생활비 분담금' });
+    push(day(27), 'transfer', 1400000, { accountId: 'a_salary2', toAccountId: 'a_living', memberId: 'm_partner', memo: '생활비 분담금' });
 
     // 반려견
     push(day(8), 'expense', between(52000, 78000, 500), { categoryId: 'c_dog', accountId: 'a_card', memberId: 'm_dog', memo: pick(['사료 정기배송', '사료 + 간식']) });
@@ -138,7 +147,7 @@ function sampleTxns(config) {
     ];
     for (const d of weddingDays) {
       const w = pick(weddingMemo);
-      push(day(d), 'expense', w[1], { categoryId: 'c_wedding', accountId: 'a_card', memo: w[0] });
+      push(day(d), 'expense', w[1], { categoryId: 'c_wedding', accountId: rnd() < 0.5 ? 'a_salary1' : 'a_salary2', memo: w[0] });
     }
 
     // 변동 지출
@@ -433,9 +442,10 @@ class Store {
     const bal = this.balances(asOf);
     let assets = 0;
     let debts = 0;
+    // 종류가 아니라 잔고의 부호로 가른다. 마이너스 통장도, 더 낸 카드값도 이러면 맞는다.
     for (const a of this.config.accounts) {
       const v = bal[a.id] || 0;
-      if (ACCOUNT_TYPES[a.type]?.liability) debts += Math.min(0, v);
+      if (v < 0) debts += v;
       else assets += v;
     }
     return { assets, debts, net: assets + debts, bal };

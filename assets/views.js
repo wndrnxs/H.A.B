@@ -89,6 +89,30 @@ function comparePrev(grain, anchor) {
   return { from: prev.from, to: addDays(prev.from, elapsed - 1), partial: true };
 }
 
+/**
+ * 천 단위 쉼표가 붙는 금액 입력칸. 화면에는 1,000,000 으로 보이고 저장은 숫자로 한다.
+ * allowNegative 를 켜면 마이너스 통장처럼 음수도 적을 수 있다.
+ */
+function moneyInput({ value, onCommit, label, placeholder, width, allowNegative = false }) {
+  const show = (v) => (v === null || v === undefined || v === '' ? '' : wonPlain(v));
+  const parse = (raw) => {
+    const neg = allowNegative && raw.trim().startsWith('-');
+    const digits = raw.replace(/[^\d]/g, '').slice(0, 15);
+    if (digits === '') return null;
+    return neg ? -Number(digits) : Number(digits);
+  };
+  return el('input', {
+    type: 'text', inputmode: 'numeric', 'aria-label': label, placeholder,
+    value: show(value), style: width ? `width:${width}` : null,
+    oninput: (e) => { e.target.value = show(parse(e.target.value)); },
+    onchange: (e) => {
+      const v = parse(e.target.value);
+      e.target.value = show(v);
+      onCommit(v);
+    },
+  });
+}
+
 function memberName(id) {
   if (!id) return '공동';
   const m = store.member(id);
@@ -114,6 +138,7 @@ function txnSub(t) {
   const bits = [];
   if (t.kind === 'transfer') {
     bits.push(`${store.account(t.accountId)?.name || '?'} → ${store.account(t.toAccountId)?.name || '?'}`);
+    if (t.memberId) bits.push(memberName(t.memberId));
   } else {
     if (catOf(t)) bits.push(catOf(t).name);
     if (store.account(t.accountId)) bits.push(store.account(t.accountId).name);
@@ -241,7 +266,7 @@ function viewDashboard() {
   out.push(el('div', { class: 'tiles' }, [
     tile('순자산', won(nw.net), '자산 − 부채'),
     tile('총자산', won(nw.assets), '통장 · 현금 · 투자'),
-    tile('카드·대출', won(nw.debts), '아직 갚지 않은 돈'),
+    tile('부채', won(nw.debts), '카드값 · 대출 남은 돈'),
     tile('건수', `${list.length}건`, `${elapsed}일 동안`),
   ]));
 
@@ -264,6 +289,8 @@ function viewDashboard() {
     ]),
   ]));
 
+  const shared = sharedAccountCard();
+  if (shared) out.push(shared);
   out.push(budgetCard());
   out.push(card({
     title: '최근 내역',
@@ -271,6 +298,79 @@ function viewDashboard() {
   }, [txnList(store.txns().slice(0, 7))]));
 
   return out;
+}
+
+/**
+ * 둘이 돈을 모아 쓰는 통장 현황. 이체는 수입도 지출도 아니라서
+ * 그냥 두면 "이번 달 누가 얼마 넣었나"가 어디에도 안 보인다. 그걸 여기서 보여준다.
+ */
+function sharedAccountCard() {
+  const id = store.config.settings.sharedAccountId;
+  const acct = id ? store.account(id) : null;
+  if (!acct) return null;
+
+  const from = startOfMonth(ui.anchor);
+  const to = endOfMonth(ui.anchor);
+  const list = store.inRange(from, to);
+  const inflow = list.filter((t) => (t.kind === 'transfer' && t.toAccountId === id) || (t.kind === 'income' && t.accountId === id));
+  const filled = sum(inflow, (t) => t.amount);
+  const spent = sum(list.filter((t) => t.kind === 'expense' && t.accountId === id), (t) => t.amount);
+  const moved = sum(list.filter((t) => t.kind === 'transfer' && t.accountId === id), (t) => t.amount);
+  const balance = store.balances(to)[id] || 0;
+
+  const people = [...store.config.members.map((m) => ({ id: m.id, name: m.name, emoji: m.emoji })), { id: null, name: '누구인지 안 적음', emoji: '❔' }];
+  const shares = people
+    .map((m, i) => ({
+      ...m, slot: i + 1,
+      value: sum(inflow.filter((x) => (m.id ? x.memberId === m.id : !x.memberId)), (x) => x.amount),
+    }))
+    .filter((m) => m.value > 0);
+
+  const lastFilled = (() => {
+    for (let back = 1; back <= 6; back += 1) {
+      const a = startOfMonth(addMonths(ui.anchor, -back));
+      const got = sum(
+        store.inRange(a, endOfMonth(a)).filter((x) => (x.kind === 'transfer' && x.toAccountId === id) || (x.kind === 'income' && x.accountId === id)),
+        (x) => x.amount,
+      );
+      if (got > 0) return { amount: got, month: Number(a.slice(5, 7)) };
+    }
+    return null;
+  })();
+
+  return card({
+    title: '공동 생활비',
+    sub: `${acct.name} · ${Number(from.slice(5, 7))}월`,
+    actions: [el('button', {
+      class: 'btn sm ghost', text: '내역 보기 →',
+      onclick: () => { setFilter({ accountId: id, kind: 'all' }); setUi({ page: 'txns' }); },
+    })],
+  }, [
+    el('div', { class: 'hero-side', style: 'margin-bottom:14px' }, [
+      el('div', { class: 'kv' }, [el('span', { class: 'k', text: '채운 돈' }), el('span', { class: 'v in', text: won(filled) })]),
+      el('div', { class: 'kv' }, [el('span', { class: 'k', text: '여기서 쓴 돈' }), el('span', { class: 'v out', text: won(spent) })]),
+      el('div', { class: 'kv' }, [el('span', { class: 'k', text: '옮긴 돈' }), el('span', { class: 'v', text: won(moved) }), el('span', { class: 'k', text: '카드값·상환 등' })]),
+      el('div', { class: 'kv' }, [el('span', { class: 'k', text: '남은 잔액' }), el('span', { class: `v ${balance < 0 ? 'out' : ''}`, text: won(balance) })]),
+    ]),
+    shares.length
+      ? el('div', {}, [
+        el('div', { class: 'stack', role: 'img', 'aria-label': `분담 비율: ${shares.map((s) => `${s.name} ${Math.round((s.value / filled) * 100)}퍼센트`).join(', ')}` },
+          shares.map((s) => el('span', { style: `width:${(s.value / filled) * 100}%;background:var(--s${s.slot})` }))),
+        el('div', { class: 'legend' }, shares.map((s) => el('span', { class: 'li' }, [
+          el('span', { class: 'sw', style: `background:var(--s${s.slot})` }),
+          `${s.emoji} ${s.name} ${won(s.value)} (${((s.value / filled) * 100).toFixed(0)}%)`,
+        ]))),
+      ])
+      : el('p', {
+        class: 'empty', style: 'padding:14px 10px',
+        text: lastFilled
+          ? `이번 달은 아직 채운 내역이 없어요. ${lastFilled.month}월에는 ${won(lastFilled.amount)}을 넣었어요.`
+          : '이 통장으로 돈을 옮길 때 이체로 적고 “누가 넣은 돈”을 골라 두면, 이번 달 분담이 여기에 보여요.',
+      }),
+    spent + moved > filled && filled > 0
+      ? el('p', { style: 'font-size:12px;color:var(--warn);margin:10px 0 0', text: `이번 달은 채운 돈보다 ${won(spent + moved - filled)} 더 나갔어요.` })
+      : null,
+  ]);
 }
 
 function tile(k, v, d) {
@@ -522,7 +622,7 @@ function viewAssets() {
   const t = withTable('assets-net', chartBox((b) => areaChart(b, points, { height: 235, aria: '최근 12개월 순자산 추이' }), 235),
     () => dataTable(['월', '순자산', '전월 대비'], points.map((p, i) => [p.full, won(p.value), i ? won(p.value - points[i - 1].value) : '—'])));
 
-  const groupsOrder = ['bank', 'cash', 'savings', 'invest', 'card', 'loan'];
+  const groupsOrder = ['bank', 'cash', 'deposit', 'savings', 'invest', 'card', 'loan'];
   const byType = groupsOrder
     .map((type) => ({ type, items: store.config.accounts.filter((a) => a.type === type) }))
     .filter((g) => g.items.length);
@@ -586,6 +686,17 @@ function viewSettings() {
       }),
     ]),
     el('div', { class: 'field' }, [
+      el('label', { for: 'set-shared', text: '공동 생활비 통장' }),
+      el('select', {
+        id: 'set-shared',
+        onchange: (e) => store.saveConfig({ settings: { ...cfg.settings, sharedAccountId: e.target.value || null } }),
+      }, [
+        el('option', { value: '', text: '쓰지 않음', selected: !cfg.settings.sharedAccountId }),
+        ...cfg.accounts.map((a) => el('option', { value: a.id, text: a.name, selected: cfg.settings.sharedAccountId === a.id })),
+      ]),
+      el('span', { class: 'hint', text: '둘이 돈을 모아 쓰는 통장을 고르면 대시보드에 분담과 잔액이 따로 보여요.' }),
+    ]),
+    el('div', { class: 'field' }, [
       el('label', { text: '화면 테마' }),
       el('div', { class: 'picker' }, ['system', 'light', 'dark'].map((v) => el('button', {
         'aria-pressed': (localStorage.getItem('hab.theme') || 'system') === v ? 'true' : 'false',
@@ -636,9 +747,9 @@ function viewSettings() {
       onchange: (e) => patchList('categories', i, { name: e.target.value.trim() || '이름 없음' }),
     }),
     el('span', { class: 'spacer' }),
-    c.kind === 'expense' ? el('input', {
-      type: 'number', value: c.budget ?? '', placeholder: '월 예산', style: 'width:118px', 'aria-label': `${c.name} 월 예산`,
-      onchange: (e) => patchList('categories', i, { budget: e.target.value === '' ? null : Math.max(0, Number(e.target.value)) }),
+    c.kind === 'expense' ? moneyInput({
+      value: c.budget, placeholder: '월 예산', width: '130px', label: `${c.name} 월 예산`,
+      onCommit: (v) => patchList('categories', i, { budget: v === null ? null : Math.abs(v) }),
     }) : el('span', { class: 'tag', text: '수입' }),
     el('button', {
       class: 'btn sm danger', text: '삭제',
@@ -649,7 +760,7 @@ function viewSettings() {
 
   out.push(card({
     title: '계좌와 결제수단',
-    sub: '처음 잔액을 넣어 두면 순자산이 정확해져요',
+    sub: '대출·카드는 남은 빚을 양수로 적으면 순자산에서 알아서 빼요',
     actions: [el('button', {
       class: 'btn sm', text: '+ 계좌',
       onclick: () => store.saveConfig({ accounts: [...cfg.accounts, { id: uid('a_'), name: '새 계좌', type: 'bank', opening: 0 }] }),
@@ -663,9 +774,15 @@ function viewSettings() {
       'aria-label': '계좌 종류', onchange: (e) => patchList('accounts', i, { type: e.target.value }),
     }, Object.entries(ACCOUNT_TYPES).map(([k, v]) => el('option', { value: k, text: `${v.emoji} ${v.label}`, selected: a.type === k }))),
     el('span', { class: 'spacer' }),
-    el('input', {
-      type: 'number', value: a.opening ?? 0, style: 'width:128px', 'aria-label': `${a.name} 시작 잔액`,
-      onchange: (e) => patchList('accounts', i, { opening: Math.round(Number(e.target.value) || 0) }),
+    // 대출·카드는 '얼마를 빚졌나'를 양수로 받아 적는다. 내부에서는 음수로 저장된다.
+    moneyInput({
+      value: ACCOUNT_TYPES[a.type]?.liability ? -(a.opening || 0) : a.opening || 0,
+      width: '140px', allowNegative: !ACCOUNT_TYPES[a.type]?.liability,
+      label: ACCOUNT_TYPES[a.type]?.liability ? `${a.name} 남은 빚` : `${a.name} 시작 잔액`,
+      placeholder: ACCOUNT_TYPES[a.type]?.liability ? '남은 빚' : '시작 잔액',
+      onCommit: (v) => patchList('accounts', i, {
+        opening: ACCOUNT_TYPES[a.type]?.liability ? -Math.abs(v || 0) : Math.round(v || 0),
+      }),
     }),
     el('button', {
       class: 'btn sm danger', text: '삭제',
@@ -876,8 +993,8 @@ export function openTxnSheet(existing) {
             onclick: () => { draft.categoryId = c.id; draw(); },
           }))),
         ]),
-      draft.kind === 'transfer' ? null : el('div', { class: 'field' }, [
-        el('label', { text: '누구 몫' }),
+      el('div', { class: 'field' }, [
+        el('label', { text: draft.kind === 'transfer' ? '누가 넣은 돈' : '누구 몫' }),
         el('div', { class: 'picker' }, [
           el('button', { 'aria-pressed': !draft.memberId ? 'true' : 'false', text: '🏠 공동', onclick: () => { draft.memberId = null; draw(); } }),
           ...store.config.members.map((m) => el('button', {

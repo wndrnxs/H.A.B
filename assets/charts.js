@@ -105,10 +105,15 @@ export function areaChart(container, points, opts = {}) {
       class: 'chart-svg',
     });
 
+    const seen = new Set();
     for (const t of niceTicks(max - min, 3).map((v) => v + min)) {
       if (t > max) continue;
+      const text = wonShort(t);
       svg.append(s('line', { x1: padL, x2: w - padR, y1: Y(t), y2: Y(t), style: 'stroke:var(--grid);stroke-width:1' }));
-      svg.append(label(padL - 8, Y(t) + 4, wonShort(t), { anchor: 'end', size: 10, mono: true }));
+      // 반올림 때문에 같은 글자가 두 번 찍히면 축이 거짓말을 한다 — 둘째부터 생략
+      if (seen.has(text)) continue;
+      seen.add(text);
+      svg.append(label(padL - 8, Y(t) + 4, text, { anchor: 'end', size: 10, mono: true }));
     }
 
     const line = points.map((p, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(p.value).toFixed(1)}`).join(' ');
