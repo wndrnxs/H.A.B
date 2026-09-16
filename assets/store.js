@@ -642,17 +642,23 @@ class Store {
     return bal;
   }
 
-  netWorth(asOf) {
+  /**
+   * 순자산. dashboard 를 켜면 '메인에 표시' 를 꺼 둔 계좌는 빼고 센다.
+   * 전세보증금처럼 액수가 크고 움직이지 않는 것이 매달의 변화를 덮어버릴 때 쓴다.
+   */
+  netWorth(asOf, { dashboard = false } = {}) {
     const bal = this.balances(asOf);
     let assets = 0;
     let debts = 0;
+    let hidden = [];
     // 종류가 아니라 잔고의 부호로 가른다. 마이너스 통장도, 더 낸 카드값도 이러면 맞는다.
     for (const a of this.config.accounts) {
+      if (dashboard && a.offDashboard) { hidden.push(a.name); continue; }
       const v = bal[a.id] || 0;
       if (v < 0) debts += v;
       else assets += v;
     }
-    return { assets, debts, net: assets + debts, bal };
+    return { assets, debts, net: assets + debts, bal, hidden };
   }
 
   // ---- 쓰기 ----

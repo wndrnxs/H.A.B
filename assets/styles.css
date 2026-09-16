@@ -361,6 +361,8 @@ table.data td.n { font-family: var(--font-mono); font-variant-numeric: tabular-n
 .emoji-btn[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
 .emoji-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 6px; }
 .listline:last-child { border-bottom: 0; }
+@media (max-width: 900px) { .listline { flex-wrap: wrap; } }
+.acct .n .tag { margin-left: 6px; }
 .listline .spacer { flex: 1; }
 .listline input[type="text"], .listline input[type="number"] {
   background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; font-size: 13.5px;

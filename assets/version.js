@@ -1,3 +1,3 @@
 // 어떤 판이 돌고 있는지 설정 화면에서 확인할 수 있게 한다.
 // 고칠 때마다 올린다.
-export const APP_VERSION = '2026.09.16-8';
+export const APP_VERSION = '2026.09.16-9';

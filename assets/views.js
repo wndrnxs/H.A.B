@@ -95,6 +95,25 @@ function comparePrev(grain, anchor) {
  * 천 단위 쉼표가 붙는 금액 입력칸. 화면에는 1,000,000 으로 보이고 저장은 숫자로 한다.
  * allowNegative 를 켜면 마이너스 통장처럼 음수도 적을 수 있다.
  */
+/**
+ * 쉼표를 다시 붙이면서도 커서가 튀지 않게 한다.
+ * 값을 통째로 바꿔 쓰면 커서가 맨 끝으로 가버려서, 가운데 숫자를 지울 수가 없다.
+ * 커서 앞에 숫자가 몇 개였는지를 세어 두었다가 같은 자리로 되돌린다.
+ */
+function reformatWithCaret(input, format) {
+  const caret = input.selectionStart ?? input.value.length;
+  const digitsBefore = (input.value.slice(0, caret).match(/\d/g) || []).length;
+  const next = format(input.value);
+  input.value = next;
+  let pos = 0;
+  let seen = 0;
+  while (pos < next.length && seen < digitsBefore) {
+    if (/\d/.test(next[pos])) seen += 1;
+    pos += 1;
+  }
+  try { input.setSelectionRange(pos, pos); } catch { /* 선택 조작을 막는 입력칸도 있다 */ }
+}
+
 function moneyInput({ value, onCommit, label, placeholder, width, allowNegative = false }) {
   const show = (v) => (v === null || v === undefined || v === '' ? '' : wonPlain(v));
   const parse = (raw) => {
@@ -106,7 +125,7 @@ function moneyInput({ value, onCommit, label, placeholder, width, allowNegative 
   return el('input', {
     type: 'text', inputmode: 'numeric', 'aria-label': label, placeholder,
     value: show(value), style: width ? `width:${width}` : null,
-    oninput: (e) => { e.target.value = show(parse(e.target.value)); },
+    oninput: (e) => reformatWithCaret(e.target, (raw) => show(parse(raw))),
     onchange: (e) => {
       const v = parse(e.target.value);
       e.target.value = show(v);
@@ -221,7 +240,7 @@ function viewDashboard() {
   const spent = sum(list.filter((t) => t.kind === 'expense'), (t) => t.amount);
   const income = sum(list.filter((t) => t.kind === 'income'), (t) => t.amount);
   const prevSpent = sum(prevList.filter((t) => t.kind === 'expense'), (t) => t.amount);
-  const nw = store.netWorth(to);
+  const nw = store.netWorth(to, { dashboard: true });
   const days = eachDay(from, to);
   const elapsed = Math.max(1, days.filter((d) => d <= today()).length);
   const { rows } = categoryBreakdown(list);
@@ -258,7 +277,7 @@ function viewDashboard() {
   ]));
 
   out.push(el('div', { class: 'tiles' }, [
-    tile('순자산', won(nw.net), '자산 − 부채'),
+    tile('순자산', won(nw.net), nw.hidden.length ? `${nw.hidden.join(' · ')} 제외` : '자산 − 부채'),
     tile('총자산', won(nw.assets), '통장 · 현금 · 투자'),
     tile('부채', won(nw.debts), '카드값 · 대출 남은 돈'),
     tile('건수', `${list.length}건`, `${elapsed}일 동안`),
@@ -267,13 +286,17 @@ function viewDashboard() {
   const months = monthSeries(12);
   const netPoints = months.map((m) => ({
     key: m.key, label: `${Number(m.key.slice(5))}월`, full: `${m.key.slice(0, 4)}년 ${Number(m.key.slice(5))}월`,
-    value: store.netWorth(m.end).net,
+    value: store.netWorth(m.end, { dashboard: true }).net,
   }));
   const netTable = withTable('dash-net', chartBox((b) => areaChart(b, netPoints, { height: 215, aria: '최근 12개월 순자산 추이' }), 215),
     () => dataTable(['월', '순자산'], netPoints.map((p) => [p.full, won(p.value)])));
 
   out.push(el('div', { class: 'split' }, [
-    card({ title: '자산 흐름', sub: '최근 12개월 순자산', actions: [netTable.btn] }, [netTable.node]),
+    card({
+      title: '자산 흐름',
+      sub: nw.hidden.length ? `최근 12개월 · ${nw.hidden.join(' · ')} 제외` : '최근 12개월 순자산',
+      actions: [netTable.btn],
+    }, [netTable.node]),
     card({ title: '어디에 많이 썼나', sub: periodLabel(ui.grain, ui.anchor) }, [
       chartBox((b) => donutChart(b, rows.map((r) => ({ label: r.name, value: r.value, slot: r.slot, emoji: r.emoji })), { size: 190 }), 190),
       el('div', { class: 'legend' }, rows.slice(0, 6).map((r) => el('span', { class: 'li' }, [
@@ -819,7 +842,7 @@ function viewAssets() {
             return el('div', { class: 'acct' }, [
               el('span', { class: 'ico', text: ACCOUNT_TYPES[a.type].emoji }),
               el('span', { class: 'body' }, [
-                el('span', { class: 'n', text: a.name }),
+                el('span', { class: 'n' }, [a.name, a.offDashboard ? el('span', { class: 'tag', text: '메인 제외' }) : null]),
                 el('span', { class: 't', text: ACCOUNT_TYPES[a.type].label }),
               ]),
               el('span', { class: `b num ${v < 0 ? 'neg' : ''}`, text: won(v) }),
@@ -873,10 +896,16 @@ function viewSettings() {
   out.push(card({
     title: '분류와 예산',
     sub: '끌어서 순서를 바꾸고, 아이콘을 눌러 고릅니다 · 월 예산을 비우면 예산 관리에서 빠져요',
-    actions: [el('button', {
-      class: 'btn sm', text: '+ 지출 분류',
-      onclick: () => store.saveConfig({ categories: [...cfg.categories, { id: uid('c_'), name: '새 분류', emoji: '🏷️', kind: 'expense', budget: null }] }),
-    })],
+    actions: [
+      el('button', {
+        class: 'btn sm', text: '+ 지출',
+        onclick: () => store.saveConfig({ categories: [...cfg.categories, { id: uid('c_'), name: '새 지출 분류', emoji: '🏷️', kind: 'expense', budget: null }] }),
+      }),
+      el('button', {
+        class: 'btn sm', text: '+ 수입',
+        onclick: () => store.saveConfig({ categories: [...cfg.categories, { id: uid('i_'), name: '새 수입 분류', emoji: '💰', kind: 'income', budget: null }] }),
+      }),
+    ],
   }, [sortableList('categories', cfg.categories, (c, i) => el('div', { class: 'listline' }, [
     el('button', {
       class: 'emoji-btn', type: 'button', text: c.emoji, 'aria-label': `${c.name} 아이콘 바꾸기`,
@@ -900,7 +929,7 @@ function viewSettings() {
 
   out.push(card({
     title: '계좌와 결제수단',
-    sub: '끌어서 순서를 바꿉니다 · 대출·카드는 남은 빚을 양수로 적으면 순자산에서 알아서 빼요',
+    sub: '끌어서 순서를 바꿉니다 · 대출·카드는 남은 빚을 양수로 · 메인에서 빼고 싶은 계좌는 “메인에 표시”를 꺼요',
     actions: [el('button', {
       class: 'btn sm', text: '+ 계좌',
       onclick: () => store.saveConfig({ accounts: [...cfg.accounts, { id: uid('a_'), name: '새 계좌', type: 'bank', opening: 0 }] }),
@@ -923,6 +952,11 @@ function viewSettings() {
       onCommit: (v) => patchList('accounts', i, {
         opening: ACCOUNT_TYPES[a.type]?.liability ? -Math.abs(v || 0) : Math.round(v || 0),
       }),
+    }),
+    el('button', {
+      class: 'chip', 'aria-pressed': a.offDashboard ? 'false' : 'true',
+      text: '메인에 표시', title: '대시보드의 순자산과 자산 흐름에 넣을지 정합니다',
+      onclick: () => patchList('accounts', i, { offDashboard: !a.offDashboard }),
     }),
     el('button', {
       class: 'btn sm danger', text: '삭제',
@@ -1375,11 +1409,11 @@ export function openTxnSheet(existing) {
         el('input', {
           id: 'tx-amount', type: 'text', inputmode: 'numeric', placeholder: '0',
           value: draft.amount === '' ? '' : wonPlain(draft.amount),
-          oninput: (e) => {
-            const digits = e.target.value.replace(/[^\d]/g, '').slice(0, 12);
+          oninput: (e) => reformatWithCaret(e.target, (raw) => {
+            const digits = raw.replace(/[^\d]/g, '').slice(0, 12);
             draft.amount = digits === '' ? '' : Number(digits);
-            e.target.value = digits === '' ? '' : wonPlain(Number(digits));
-          },
+            return digits === '' ? '' : wonPlain(Number(digits));
+          }),
         }),
       ]),
       el('div', { class: 'quick', style: 'margin:-6px 0 14px' }, [1000, 5000, 10000, 50000, 100000].map((v) => el('button', {
