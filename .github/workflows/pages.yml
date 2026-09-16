@@ -2,7 +2,7 @@ name: GitHub Pages 배포
 
 on:
   push:
-    branches: [main]
+    branches: [main, "claude/**"]
   workflow_dispatch:
 
 permissions:

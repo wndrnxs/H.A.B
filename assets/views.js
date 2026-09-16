@@ -2,6 +2,7 @@
 // 데이터 양이 가계부 규모(수천 건)라 이 정도면 충분히 빠르고, 코드가 단순해진다.
 
 import { store, ACCOUNT_TYPES, buildSampleData } from './store.js';
+import { prettyCode } from './firebase.js';
 import { areaChart, barChart, groupedBarChart, donutChart } from './charts.js';
 import {
   el, won, wonShort, wonPlain, today, toYMD, fromYMD, addMonths, addDays, startOfMonth, endOfMonth,
@@ -677,6 +678,8 @@ function viewSettings() {
   const cfg = store.config;
   const out = [];
 
+  out.push(shareCard());
+
   out.push(card({ title: '우리집' }, [
     el('div', { class: 'field' }, [
       el('label', { for: 'set-house', text: '가계부 이름' }),
@@ -792,7 +795,12 @@ function viewSettings() {
   ]))));
 
   const json = JSON.stringify(store.exportData(), null, 0);
-  out.push(card({ title: '데이터', sub: store.status === 'cloud' ? '이 장부는 클라우드에 저장돼 PC와 폰이 같은 내용을 봅니다' : '이 장부는 이 브라우저에 저장됩니다' }, [
+  const whereText = {
+    firebase: '이 장부는 Firebase에 저장돼 두 사람이 실시간으로 함께 씁니다',
+    cloud: '이 장부는 클라우드에 저장돼 PC와 폰이 같은 내용을 봅니다',
+    local: '이 장부는 이 브라우저에 저장됩니다',
+  }[store.status];
+  out.push(card({ title: '데이터', sub: whereText }, [
     el('p', { class: 'hint', style: 'font-size:12.5px;color:var(--ink-3);margin:0 0 12px' , text: `거래 ${store.txns().length}건 · 분류 ${cfg.categories.length}개 · 계좌 ${cfg.accounts.length}개` }),
     el('div', { class: 'quick' }, [
       el('button', {
@@ -832,6 +840,107 @@ function viewSettings() {
   ]));
 
   return out;
+}
+
+/** 둘이 같은 장부를 실시간으로 쓰기 위한 연결 상태와 조작 */
+function shareCard() {
+  const s = store.share;
+  const busy = s.busy;
+
+  const status = s.error
+    ? el('p', { style: 'font-size:13px;color:var(--crit);margin:0 0 12px', text: s.error })
+    : null;
+
+  // 1. 아직 Firebase 설정값을 안 넣은 상태
+  if (!s.available) {
+    return card({ title: '둘이 함께 쓰기', sub: '아직 연결 전' }, [
+      el('p', { style: 'font-size:13.5px;line-height:1.7;color:var(--ink-2);margin:0 0 10px' },
+        ['지금은 이 장부가 이 브라우저에만 있어요. Firebase를 연결하면 두 사람이 각자 폰에서 같은 장부를 실시간으로 쓸 수 있어요.']),
+      el('ol', { style: 'font-size:13px;line-height:1.9;color:var(--ink-2);margin:0;padding-left:20px' }, [
+        el('li', { text: 'Firebase 콘솔에서 웹 앱을 하나 만들고 설정값을 복사합니다.' }),
+        el('li', { text: '저장소의 assets/firebase-config.js 에 붙여넣고 올립니다.' }),
+        el('li', { text: 'Authentication에서 Google 로그인을 켜고, firestore.rules 를 배포합니다.' }),
+      ]),
+      el('p', { style: 'font-size:12px;color:var(--ink-3);margin:12px 0 0', text: '자세한 순서는 저장소 README의 “둘이 함께 쓰기” 항목에 적어 뒀어요.' }),
+    ]);
+  }
+
+  // 2. 설정은 됐지만 로그인 전
+  if (!s.user) {
+    return card({ title: '둘이 함께 쓰기', sub: 'Firebase 준비됨' }, [
+      status,
+      el('p', { style: 'font-size:13.5px;color:var(--ink-2);margin:0 0 12px', text: '구글 계정으로 로그인하면 두 사람이 같은 장부를 씁니다.' }),
+      el('button', { class: 'btn primary', text: busy ? '여는 중…' : 'Google로 로그인', disabled: busy, onclick: () => store.shareSignIn() }),
+    ]);
+  }
+
+  const who = el('div', { class: 'listline', style: 'border:0;padding:0 0 12px' }, [
+    el('span', { class: 'sync-pill' }, [el('span', { class: 'sync-dot' }), s.user.email || s.user.name || '로그인됨']),
+    el('span', { class: 'spacer' }),
+    el('button', { class: 'btn sm ghost', text: '로그아웃', disabled: busy, onclick: () => store.shareSignOut() }),
+  ]);
+
+  // 3. 로그인은 했는데 아직 가계부가 없음
+  if (store.status !== 'firebase') {
+    const codeInput = el('input', { type: 'text', placeholder: '초대 코드 (예: 7KQ2-M9XF)', style: 'text-transform:uppercase', id: 'join-code' });
+    return card({ title: '둘이 함께 쓰기', sub: '가계부를 고르세요' }, [
+      who,
+      status,
+      el('div', { class: 'field' }, [
+        el('label', { text: '처음이라면' }),
+        el('button', {
+          class: 'btn primary', style: 'align-self:flex-start', disabled: busy,
+          text: busy ? '만드는 중…' : '새 가계부 만들기',
+          onclick: () => store.shareCreate(),
+        }),
+        el('span', { class: 'hint', text: '지금 이 기기에서 보고 있는 내역이 그대로 올라갑니다. 만들고 나면 초대 코드가 나와요.' }),
+      ]),
+      el('div', { class: 'field' }, [
+        el('label', { for: 'join-code', text: '초대를 받았다면' }),
+        codeInput,
+        el('button', {
+          class: 'btn', style: 'align-self:flex-start', disabled: busy,
+          text: '초대 코드로 참여하기',
+          onclick: () => store.shareJoin(codeInput.value),
+        }),
+        el('span', { class: 'hint', text: '참여하면 이 기기의 내역 대신 상대방의 장부를 함께 보게 됩니다.' }),
+      ]),
+    ]);
+  }
+
+  // 4. 연결 완료
+  const code = prettyCode(s.householdId);
+  return card({ title: '둘이 함께 쓰기', sub: `${s.members}명이 같은 장부를 보는 중` }, [
+    who,
+    status,
+    el('div', { class: 'field' }, [
+      el('label', { text: '초대 코드' }),
+      el('div', { class: 'listline', style: 'border:0;padding:0;gap:8px' }, [
+        el('span', { class: 'num', style: 'font-size:20px;font-weight:600;letter-spacing:.08em', text: code }),
+        el('button', {
+          class: 'btn sm', text: '복사',
+          onclick: async () => {
+            try { await navigator.clipboard.writeText(code); toast('초대 코드를 복사했어요'); }
+            catch { toast('복사가 막혀 있어요. 코드를 직접 적어 주세요'); }
+          },
+        }),
+      ]),
+      el('span', { class: 'hint', text: '상대방이 같은 주소에 들어가 로그인한 뒤 이 코드를 넣으면 합류합니다.' }),
+    ]),
+    el('div', { class: 'field' }, [
+      el('label', { text: '초대 열어두기' }),
+      el('div', { class: 'picker' }, [
+        el('button', { 'aria-pressed': s.joinOpen ? 'true' : 'false', text: '열림', disabled: busy, onclick: () => store.shareSetOpen(true) }),
+        el('button', { 'aria-pressed': !s.joinOpen ? 'true' : 'false', text: '닫힘', disabled: busy, onclick: () => store.shareSetOpen(false) }),
+      ]),
+      el('span', { class: 'hint', text: '합류가 끝나면 닫아 두세요. 닫으면 코드를 알아도 아무도 들어오거나 들여다볼 수 없어요.' }),
+    ]),
+    el('button', {
+      class: 'btn danger', style: 'align-self:flex-start', disabled: busy,
+      text: '이 기기 연결 끊기',
+      onclick: () => confirmThen('이 기기만 연결을 끊습니다. 장부는 서버에 그대로 남고, 다시 로그인하면 이어서 쓸 수 있어요.', () => store.shareDisconnect()),
+    }),
+  ]);
 }
 
 function patchList(key, index, patch) {

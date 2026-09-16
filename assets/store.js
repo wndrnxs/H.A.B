@@ -6,6 +6,7 @@
 // 어느 쪽이든 아래 API는 동일하다.
 
 import { toYMD, today, monthKey, uid, addMonths, startOfMonth, daysInMonth, pad } from './util.js';
+import * as fb from './firebase.js';
 
 const LS_KEY = 'hab.ledger.v1';
 
@@ -330,9 +331,19 @@ class Store {
     this.config = defaultConfig();
     this.months = {};
     this.adapter = localAdapter;
-    this.status = 'local';
+    this.status = 'local';         // local | cloud(아티팩트) | firebase
     this.listeners = new Set();
     this.ready = false;
+    this.unsub = null;
+    // 파이어베이스 공유 상태 — 설정 화면이 이것만 보고 그린다
+    this.share = {
+      available: fb.isConfigured(), user: null, householdId: null,
+      joinOpen: false, members: 0, ownerUid: null, busy: false, error: null,
+    };
+  }
+
+  isRemote() {
+    return this.status === 'cloud' || this.status === 'firebase';
   }
 
   on(fn) {
@@ -345,6 +356,32 @@ class Store {
   }
 
   async init() {
+    // 1) 파이어베이스로 둘이 함께 쓰는 중이면 그것부터
+    if (this.share.available) {
+      try {
+        const user = await fb.currentUser();
+        this.share.user = user ? { uid: user.uid, email: user.email, name: user.displayName } : null;
+        if (user) {
+          const hid = await fb.myHouseholdId(user.uid);
+          if (hid) {
+            await this.attachFirebase(hid, 'member');
+            this.ready = true;
+            this.watchAuth().catch(() => {});
+            this.emit();
+            return;
+          }
+        }
+      } catch (err) {
+        // 연결에 실패하면 이 브라우저에 있는 장부로 조용히 돌아간다
+        this.share.error = err?.message || '함께 쓰기 연결에 실패했어요.';
+        if (this.unsub) { this.unsub(); this.unsub = null; }
+        this.adapter = localAdapter;
+        this.status = 'local';
+        this.share.householdId = null;
+      }
+    }
+
+    // 2) 아티팩트로 띄웠으면 공유 문서 저장소, 아니면 이 브라우저
     const db = await resolveCloudDb();
     if (db) {
       this.adapter = cloudAdapter(db);
@@ -365,7 +402,7 @@ class Store {
     if (this.status === 'cloud') {
       // 이미 클라우드에 있던 장부를 그대로 다시 올리지 않는다 (다른 기기의 입력을 덮어쓸 수 있다)
       if (needsSeed) await this.pushAll();
-      this.adapter.subscribe(
+      this.unsub = this.adapter.subscribe(
         (config) => { if (config) { this.config = migrate(config); this.emit(); } },
         (months) => { this.months = months; this.emit(); },
       );
@@ -373,6 +410,62 @@ class Store {
       await this.persist();
     }
     this.ready = true;
+    if (this.share.available) this.watchAuth().catch(() => {});
+    this.emit();
+  }
+
+  /** 로그인·로그아웃이 다른 탭이나 리다이렉트로 일어나도 따라간다 */
+  async watchAuth() {
+    const stop = await fb.onAuthChange(async (user) => {
+      this.share.user = user ? { uid: user.uid, email: user.email, name: user.displayName } : null;
+      if (!user && this.status === 'firebase') {
+        await this.detachFirebase();
+      } else if (user && this.status !== 'firebase') {
+        const hid = await fb.myHouseholdId(user.uid).catch(() => null);
+        if (hid) await this.attachFirebase(hid, 'member');
+      }
+      this.emit();
+    });
+    return stop;
+  }
+
+  /**
+   * 파이어베이스 가계부에 붙는다.
+   *  - 'owner'  : 지금 이 기기에서 보던 장부를 통째로 올린다 (새로 만들 때)
+   *  - 'member' : 서버에 있는 장부를 받아 온다 (초대받아 들어갈 때)
+   */
+  async attachFirebase(hid, role) {
+    if (this.unsub) { this.unsub(); this.unsub = null; }
+    const adapter = await fb.firebaseAdapter(hid);
+    this.adapter = adapter;
+    this.status = 'firebase';
+    this.share.householdId = hid;
+
+    if (role === 'owner') {
+      await this.pushAll();
+    } else {
+      const loaded = await adapter.load();
+      if (loaded && (loaded.config || Object.keys(loaded.months).length)) this.apply(loaded);
+      else await this.pushAll();
+    }
+
+    this.unsub = adapter.subscribe(
+      (config) => { this.config = migrate(config); this.emit(); },
+      (months) => { this.months = months; this.emit(); },
+      (meta) => { Object.assign(this.share, meta); this.emit(); },
+    );
+    this.emit();
+  }
+
+  /** 로그아웃 — 보던 장부를 이 브라우저에 남겨 두고 혼자 쓰기로 돌아간다 */
+  async detachFirebase() {
+    if (this.unsub) { this.unsub(); this.unsub = null; }
+    this.adapter = localAdapter;
+    this.status = 'local';
+    this.share.householdId = null;
+    this.share.members = 0;
+    this.share.joinOpen = false;
+    await this.persist();
     this.emit();
   }
 
@@ -382,12 +475,71 @@ class Store {
   }
 
   async persist() {
-    if (this.status === 'local') await localAdapter.save({ config: this.config, months: this.months });
+    if (!this.isRemote()) await localAdapter.save({ config: this.config, months: this.months });
   }
 
   async pushAll() {
     await this.adapter.putConfig(this.config);
     for (const [k, items] of Object.entries(this.months)) await this.adapter.putMonth(k, items);
+  }
+
+  // ---- 함께 쓰기(파이어베이스) ----
+
+  async shareRun(job) {
+    this.share.busy = true;
+    this.share.error = null;
+    this.emit();
+    try {
+      await job();
+    } catch (err) {
+      this.share.error = err?.message || '잘 되지 않았어요.';
+    } finally {
+      this.share.busy = false;
+      this.emit();
+    }
+  }
+
+  shareSignIn() {
+    return this.shareRun(() => fb.signIn());
+  }
+
+  shareSignOut() {
+    return this.shareRun(() => fb.signOut());
+  }
+
+  /** 지금 이 기기에서 보던 장부를 그대로 올리면서 새 가계부를 연다 */
+  shareCreate() {
+    return this.shareRun(async () => {
+      const user = this.share.user;
+      if (!user) throw new Error('먼저 로그인해 주세요.');
+      const hid = await fb.createHousehold(user, this.config);
+      await this.attachFirebase(hid, 'owner');
+    });
+  }
+
+  shareJoin(code) {
+    return this.shareRun(async () => {
+      const user = this.share.user;
+      if (!user) throw new Error('먼저 로그인해 주세요.');
+      const hid = await fb.joinHousehold(user, code);
+      await this.attachFirebase(hid, 'member');
+    });
+  }
+
+  shareSetOpen(open) {
+    return this.shareRun(async () => {
+      await fb.setJoinOpen(this.share.householdId, open);
+      this.share.joinOpen = !!open;
+    });
+  }
+
+  /** 이 기기만 연결을 끊는다. 장부는 서버에 그대로 남는다. */
+  shareDisconnect() {
+    return this.shareRun(async () => {
+      if (this.share.user) await fb.leaveHousehold(this.share.user);
+      await fb.signOut();
+      await this.detachFirebase();
+    });
   }
 
   // ---- 읽기 ----
@@ -489,7 +641,7 @@ class Store {
 
   async removeFrom(key, id) {
     const tomb = { id, deleted: true, updatedAt: Date.now() };
-    if (this.status === 'cloud') {
+    if (this.isRemote()) {
       this.months[key][id] = tomb;
       await this.adapter.putItems(key, { [id]: tomb });
     } else {
@@ -499,14 +651,14 @@ class Store {
   }
 
   async writeMonth(key, items) {
-    if (this.status === 'cloud') await this.adapter.putItems(key, items);
+    if (this.isRemote()) await this.adapter.putItems(key, items);
     else await this.persist();
   }
 
   async saveConfig(next) {
     this.config = migrate({ ...this.config, ...next });
     this.emit();
-    if (this.status === 'cloud') await this.adapter.putConfig(this.config);
+    if (this.isRemote()) await this.adapter.putConfig(this.config);
     else await this.persist();
   }
 
@@ -514,7 +666,7 @@ class Store {
     for (const [key, items] of Object.entries(this.months)) {
       const gone = Object.values(items).filter((t) => t && t.sample);
       if (!gone.length) continue;
-      if (this.status === 'cloud') {
+      if (this.isRemote()) {
         const patch = {};
         for (const t of gone) patch[t.id] = { id: t.id, deleted: true, updatedAt: Date.now() };
         Object.assign(items, patch);
@@ -531,7 +683,7 @@ class Store {
     if (!data || typeof data !== 'object' || !data.config) throw new Error('가계부 파일 형식이 아닙니다.');
     await this.adapter.clear();
     this.apply(data);
-    if (this.status === 'cloud') await this.pushAll();
+    if (this.isRemote()) await this.pushAll();
     else await this.persist();
     this.emit();
   }

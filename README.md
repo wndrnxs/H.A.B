@@ -43,20 +43,88 @@ npx http-server . -p 8080     # 또는 python3 -m http.server 8080
    - iPhone: 공유 → **홈 화면에 추가**
    - Android: 메뉴 → **앱 설치**
 
+## 둘이 함께 쓰기 (Firebase)
+
+두 사람이 각자 폰에서 **같은 장부를 실시간으로** 쓰려면 Firebase를 한 번 연결하면 됩니다.
+한쪽이 내역을 적으면 다른 쪽 화면에 바로 나타납니다.
+
+### 1. Firebase 콘솔에서 준비 (10분)
+
+1. [Firebase 콘솔](https://console.firebase.google.com)에서 프로젝트를 고르거나 새로 만듭니다.
+2. **Authentication → Sign-in method → Google** 을 켭니다.
+3. **Firestore Database** 를 만듭니다. 위치는 `asia-northeast3`(서울)가 제일 빠릅니다.
+4. **프로젝트 설정(⚙) → 내 앱 → 웹 앱 추가(`</>`)** 로 웹 앱을 만들고, 나오는 `firebaseConfig` 를 복사합니다.
+
+### 2. 설정값 넣기
+
+복사한 값을 `assets/firebase-config.js` 에 붙여넣고 올립니다.
+
+```js
+export const firebaseConfig = {
+  apiKey: 'AIza...',
+  authDomain: '우리집가계부.firebaseapp.com',
+  projectId: '우리집가계부',
+  storageBucket: '우리집가계부.firebasestorage.app',
+  messagingSenderId: '123456789012',
+  appId: '1:123456789012:web:abcdef...',
+};
+```
+
+이 값들은 **비밀이 아닙니다.** 웹 앱에서는 어차피 브라우저로 내려가는 '프로젝트 주소'에
+가깝고, 구글도 공개를 전제로 설명합니다. 실제 보호는 아래 규칙이 합니다.
+
+### 3. 보안 규칙 배포 (이 단계를 빠뜨리면 안 됩니다)
+
+```bash
+npm i -g firebase-tools
+firebase login
+firebase use <프로젝트-ID>
+firebase deploy --only firestore:rules
+```
+
+`firestore.rules` 는 **로그인한 우리 가족만 우리 장부를 읽고 쓰도록** 막아 둡니다.
+콘솔의 Firestore → 규칙 탭에 파일 내용을 붙여넣어도 됩니다.
+
+### 4. 주소 등록
+
+- **Firebase Hosting 으로 배포한다면** (`firebase deploy --only hosting`) 추가 설정이 없습니다.
+- **GitHub Pages 를 쓴다면** 콘솔 → Authentication → 설정 → **승인된 도메인** 에
+  `wndrnxs.github.io` 를 추가해야 로그인이 됩니다.
+
+### 5. 둘이 연결하기
+
+1. 내 폰/PC에서 앱을 열고 **설정 → 둘이 함께 쓰기 → Google로 로그인 → 새 가계부 만들기**.
+   지금까지 이 기기에 쌓인 내역이 그대로 올라갑니다.
+2. 화면에 `7KQ2-M9XF` 같은 **초대 코드**가 나옵니다.
+3. 예비 신부님이 같은 주소에 들어가 로그인한 뒤 그 코드를 넣으면 합류합니다.
+4. 합류가 끝나면 **초대 열어두기를 '닫힘'** 으로 바꿔 주세요. 닫으면 코드를 알아도
+   아무도 들어오거나 들여다볼 수 없습니다.
+
+### 저장 구조
+
+```
+households/{초대코드}            이름, 구성원 UID 목록, 초대 개폐, 설정(분류·계좌·구성원)
+households/{초대코드}/tx/{2026-09}  그 달의 거래 전체 { 거래ID: {...} }
+users/{내UID}                    내가 어느 가계부에 속하는지
+```
+
+거래를 한 달에 문서 하나로 모으고 **항목 단위로 병합**해서 씁니다. 둘이 같은 달을 동시에
+손대도 서로의 입력을 덮어쓰지 않고, 읽기 횟수도 적게 듭니다. 삭제는 묘비(tombstone)로
+남겨서 다른 기기에도 삭제가 전파됩니다. Firestore 오프라인 캐시를 켜 두어 지하철에서도
+적을 수 있고, 신호가 돌아오면 알아서 올라갑니다.
+
 ## 데이터는 어디에 저장되나
 
 | 실행 위치 | 저장소 | 특징 |
 | --- | --- | --- |
-| GitHub Pages·로컬 서버 | 브라우저 `localStorage` | 기기 안에만 남습니다. PC와 폰이 각각 따로 쌓입니다. |
-| Claude 아티팩트 | 아티팩트 공유 문서 저장소 | 같은 계정으로 연 PC·폰이 **같은 장부**를 봅니다. |
+| Firebase 연결 + 로그인 | Firestore | **두 사람이 같은 장부를 실시간으로** 씁니다. 오프라인에서도 적힙니다. |
+| GitHub Pages·로컬 서버 (로그인 전) | 브라우저 `localStorage` | 기기 안에만 남습니다. |
+| Claude 아티팩트 | 아티팩트 공유 문서 저장소 | 같은 계정으로 연 PC·폰이 같은 장부를 봅니다. |
 
-같은 코드가 실행 환경을 보고 알아서 고릅니다 (`assets/store.js` 의 어댑터).
+같은 코드가 실행 환경과 로그인 상태를 보고 알아서 고릅니다 (`assets/store.js` 의 어댑터).
 사이드바(모바일은 설정 화면)에 지금 어느 쪽인지 표시됩니다.
-
-**두 사람이 각자 휴대폰에서 실시간으로 함께 쓰려면** 서버가 필요합니다.
-`assets/store.js` 의 어댑터는 `load / putConfig / putItems / putMonth / clear / subscribe`
-여섯 가지만 구현하면 되도록 잘라 두었으니, Supabase·Firebase 같은 것을 하나 더 끼우면 됩니다.
-그 전까지는 **설정 → 데이터 → 백업 복사 / 불러오기** 로 주고받을 수 있습니다.
+어댑터는 `load / putConfig / putItems / putMonth / clear / subscribe` 여섯 가지만
+구현하면 되므로 다른 백엔드로 갈아 끼우기도 쉽습니다.
 
 ## 폴더 구조
 
@@ -70,6 +138,11 @@ assets/
   views.js                 다섯 화면과 입력 시트
   app.js                   부팅, 사이드바·상단바·하단 탭
   styles.css               테마 토큰과 레이아웃
+assets/
+  firebase.js              로그인, 가계부 참여, Firestore 어댑터
+  firebase-config.js       Firebase 설정값 (여기를 채우세요)
+firestore.rules            보안 규칙 — 우리 가족만 우리 장부를
+firebase.json              Firestore·Hosting 배포 설정
 sw.js                      오프라인용 서비스 워커
 manifest.webmanifest       홈 화면 설치 정보
 tools/make-icons.mjs       아이콘 PNG 생성기 (node tools/make-icons.mjs)
