@@ -376,7 +376,7 @@ class Store {
         const user = await fb.currentUser();
         this.share.user = user ? { uid: user.uid, email: user.email, name: user.displayName } : null;
         if (user) {
-          const hid = await fb.myHouseholdId(user.uid);
+          const hid = await this.findHousehold(user);
           if (hid) {
             await this.attachFirebase(hid, 'member');
             this.ready = true;
@@ -435,12 +435,33 @@ class Store {
       if (!user && this.status === 'firebase') {
         await this.detachFirebase();
       } else if (user && this.status !== 'firebase') {
-        const hid = await fb.myHouseholdId(user.uid).catch(() => null);
+        const hid = await this.findHousehold(user);
         if (hid) await this.attachFirebase(hid, 'member');
       }
       this.emit();
     });
     return stop;
+  }
+
+  /**
+   * 이 계정이 속한 가계부를 찾는다.
+   * 서버의 users/{uid} 가 먼저고, 그게 없으면 이 기기가 기억하는 코드로 되살린다.
+   * 둘 다 없을 때만 '새로 만들기 / 초대 코드' 화면을 보여 준다.
+   */
+  async findHousehold(user) {
+    try {
+      const hid = await fb.myHouseholdId(user.uid);
+      if (hid) return hid;
+    } catch {
+      this.share.error = '가계부 정보를 불러오지 못했어요. 연결을 확인하고 새로고침해 주세요.';
+      return null;
+    }
+    const remembered = fb.rememberedHousehold();
+    if (remembered) {
+      const back = await fb.relinkHousehold(user, remembered).catch(() => null);
+      if (back) return back;
+    }
+    return null;
   }
 
   /**
@@ -458,10 +479,13 @@ class Store {
     if (role === 'owner') {
       await this.pushAll();
     } else {
+      // 남의(또는 예전 내) 장부에 붙을 때는 절대 올리지 않는다.
+      // 로그아웃 뒤 빈 장부를 들고 붙었다가 서버를 지워버리는 사고를 막는다.
       const loaded = await adapter.load();
-      if (loaded && (loaded.config || Object.keys(loaded.months).length)) this.apply(loaded);
-      else await this.pushAll();
+      if (!loaded) throw new Error('가계부를 찾지 못했어요. 초대 코드를 다시 확인해 주세요.');
+      this.apply({ config: loaded.config || this.config, months: loaded.months || {} });
     }
+    fb.rememberHousehold(hid);
 
     this.unsub = adapter.subscribe(
       (config) => { this.config = migrate(config); this.emit(); },
@@ -553,10 +577,13 @@ class Store {
     });
   }
 
-  /** 이 기기만 연결을 끊는다. 장부는 서버에 그대로 남는다. */
-  shareDisconnect() {
+  /**
+   * 가계부에서 완전히 나간다. 구성원 목록에서도 빠지므로, 돌아오려면 초대 코드가
+   * 다시 필요하다. 단순히 이 기기에서 그만 보고 싶은 것이라면 로그아웃이면 된다.
+   */
+  shareLeave() {
     return this.shareRun(async () => {
-      if (this.share.user) await fb.leaveHousehold(this.share.user);
+      if (this.share.user) await fb.leaveHousehold(this.share.user, this.share.householdId);
       await fb.signOut();
       await this.detachFirebase();
     });

@@ -941,14 +941,14 @@ function shareCard() {
         el('span', { class: 'hint', text: '지금 이 기기에서 보고 있는 내역이 그대로 올라갑니다. 만들고 나면 초대 코드가 나와요.' }),
       ]),
       el('div', { class: 'field' }, [
-        el('label', { for: 'join-code', text: '초대를 받았다면' }),
+        el('label', { for: 'join-code', text: '초대를 받았다면 · 쓰던 가계부로 돌아간다면' }),
         codeInput,
         el('button', {
           class: 'btn', style: 'align-self:flex-start', disabled: busy,
           text: '초대 코드로 참여하기',
           onclick: () => store.shareJoin(codeInput.value),
         }),
-        el('span', { class: 'hint', text: '참여하면 이 기기의 내역 대신 상대방의 장부를 함께 보게 됩니다.' }),
+        el('span', { class: 'hint', text: '참여하면 이 기기의 내역 대신 그 장부를 함께 보게 됩니다. 이 기기 내역이 서버를 덮어쓰지는 않아요.' }),
       ]),
     ]);
   }
@@ -970,7 +970,7 @@ function shareCard() {
           },
         }),
       ]),
-      el('span', { class: 'hint', text: '상대방이 같은 주소에 들어가 로그인한 뒤 이 코드를 넣으면 합류합니다.' }),
+      el('span', { class: 'hint', text: '상대방이 같은 주소에 들어가 로그인한 뒤 이 코드를 넣으면 합류합니다. 어딘가 적어 두면 마음이 편합니다.' }),
     ]),
     el('div', { class: 'field' }, [
       el('label', { text: '초대 열어두기' }),
@@ -980,10 +980,16 @@ function shareCard() {
       ]),
       el('span', { class: 'hint', text: '합류가 끝나면 닫아 두세요. 닫으면 코드를 알아도 아무도 들어오거나 들여다볼 수 없어요.' }),
     ]),
+    el('p', { style: 'font-size:12px;color:var(--ink-3);margin:4px 0 14px;line-height:1.7' },
+      ['이 기기에서 그만 보고 싶을 때는 위의 ', el('b', { text: '로그아웃' }),
+        ' 이면 됩니다. 같은 구글 계정으로 다시 로그인하면 초대 코드 없이 장부가 그대로 돌아와요.']),
     el('button', {
       class: 'btn danger', style: 'align-self:flex-start', disabled: busy,
-      text: '이 기기 연결 끊기',
-      onclick: () => confirmThen('이 기기만 연결을 끊고 여기 남은 사본을 지웁니다. 장부는 서버에 그대로 남아서, 다시 로그인하면 이어서 쓸 수 있어요.', () => store.shareDisconnect()),
+      text: '이 가계부에서 나가기',
+      onclick: () => confirmThen(
+        `구성원 목록에서 빠집니다. 다시 들어오려면 초대 코드 ${code} 가 필요해요. 장부 자체는 남은 구성원에게 그대로 남습니다. 계속할까요?`,
+        () => store.shareLeave(),
+      ),
     }),
   ]);
 }

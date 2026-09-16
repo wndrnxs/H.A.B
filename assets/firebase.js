@@ -193,10 +193,45 @@ export async function setJoinOpen(code, open) {
   await updateDoc(doc(c.db, 'households', code), { joinOpen: !!open });
 }
 
-export async function leaveHousehold(user) {
+/**
+ * 이 기기가 마지막으로 쓰던 가계부를 기억해 둔다.
+ * users/{uid} 를 못 읽거나 지워졌을 때 돌아갈 길을 하나 더 남기는 것이다.
+ */
+const LAST_KEY = 'hab.lastHousehold';
+
+export function rememberHousehold(code) {
+  try { localStorage.setItem(LAST_KEY, code); } catch { /* 저장 못 해도 그만 */ }
+}
+
+export function rememberedHousehold() {
+  try { return localStorage.getItem(LAST_KEY) || null; } catch { return null; }
+}
+
+export function forgetHousehold() {
+  try { localStorage.removeItem(LAST_KEY); } catch { /* 무시 */ }
+}
+
+/** 이미 구성원인 가계부라면 users/{uid} 를 다시 세워 준다. 초대 코드를 다시 묻지 않기 위한 것. */
+export async function relinkHousehold(user, code) {
   const c = await boot();
-  const { doc, deleteDoc } = c.sdk.fs;
+  if (!c) return null;
+  const { doc, getDoc, setDoc } = c.sdk.fs;
+  const snap = await getDoc(doc(c.db, 'households', code)).catch(() => null);
+  if (!snap || !snap.exists()) return null;
+  if (!(snap.data().memberUids || []).includes(user.uid)) return null;
+  await setDoc(doc(c.db, 'users', user.uid), { householdId: code, email: user.email || '' });
+  return code;
+}
+
+/** 가계부에서 완전히 나간다. 다시 들어오려면 초대 코드가 필요하다. */
+export async function leaveHousehold(user, code) {
+  const c = await boot();
+  const { doc, updateDoc, deleteDoc, arrayRemove } = c.sdk.fs;
+  if (code) {
+    await updateDoc(doc(c.db, 'households', code), { memberUids: arrayRemove(user.uid) }).catch(() => {});
+  }
   await deleteDoc(doc(c.db, 'users', user.uid)).catch(() => {});
+  forgetHousehold();
 }
 
 function rulesMessage(err, fallback) {
