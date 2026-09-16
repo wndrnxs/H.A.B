@@ -3,6 +3,7 @@
 
 import { store, ACCOUNT_TYPES, buildSampleData } from './store.js';
 import { prettyCode } from './firebase.js';
+import { APP_VERSION } from './version.js';
 import { areaChart, barChart, groupedBarChart, donutChart } from './charts.js';
 import {
   el, won, wonShort, wonPlain, today, toYMD, fromYMD, addMonths, addDays, startOfMonth, endOfMonth,
@@ -828,6 +829,7 @@ function viewSettings() {
           toast('예시 내역을 넣었어요');
         }),
       }) : null,
+      el('button', { class: 'btn', text: '앱 업데이트 확인', onclick: forceUpdate }),
       el('button', {
         class: 'btn danger', text: '전부 지우고 새로 시작',
         onclick: () => confirmThen(
@@ -842,9 +844,41 @@ function viewSettings() {
       }),
     ]),
     el('div', { id: 'backup-box' }),
+    el('p', {
+      style: 'font-size:11.5px;color:var(--ink-3);margin:14px 0 0',
+      text: `앱 버전 ${APP_VERSION}`,
+    }),
   ]));
 
   return out;
+}
+
+/**
+ * 오프라인용 캐시를 통째로 버리고 다시 받는다.
+ * 고친 코드가 배포됐는데 옛날 화면이 계속 보일 때 쓰는 탈출구.
+ * 장부(브라우저 저장분·서버 저장분)는 건드리지 않는다.
+ */
+async function forceUpdate() {
+  toast('최신 버전을 받는 중…');
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      for (const r of regs) {
+        r.active?.postMessage('flush');
+        await r.unregister();
+      }
+    }
+    if (window.caches) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k)));
+    }
+  } catch {
+    // 캐시를 못 지워도 새로고침은 해본다
+  }
+  // 주소에 시간을 붙여 브라우저 캐시까지 우회한다
+  const url = new URL(location.href);
+  url.searchParams.set('v', Date.now().toString(36));
+  location.replace(url.toString());
 }
 
 /** 둘이 같은 장부를 실시간으로 쓰기 위한 연결 상태와 조작 */
