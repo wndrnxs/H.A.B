@@ -600,21 +600,26 @@ function spendingCards() {
   });
 
   return [
-    card({ title: '분류별 지출', sub: `${periodLabel(ui.grain, ui.anchor)} · 총 ${won(spent)}`, actions: [catTable.btn] }, [
-      el('div', { class: 'split donut' }, [
-        catTable.node,
+    // 분류·결제수단·도넛을 한 카드 세 칸에 나란히. 따로 두면 각자 오른쪽이 비었다.
+    card({ title: '지출 들여다보기', sub: `${periodLabel(ui.grain, ui.anchor)} · 총 ${won(spent)}`, actions: [catTable.btn] }, [
+      el('div', { class: 'split3' }, [
+        el('div', {}, [el('div', { class: 'eyebrow', style: 'margin:0 0 4px', text: '분류별' }), catTable.node]),
+        el('div', {}, [
+          el('div', { class: 'eyebrow', style: 'margin:0 0 4px', text: '결제수단별' }),
+          byAccount.length ? catBars(byAccount, spent, null, { bars: false }) : el('p', { class: 'empty', text: '지출 내역이 없어요.' }),
+        ]),
         chartBox((b) => donutChart(b, rows.map((r) => ({ label: r.name, value: r.value, slot: r.slot, emoji: r.emoji })), { size: 186 }), 186),
       ]),
     ]),
-    card({ title: '결제수단별', sub: '어느 통장·카드에서 나갔나' }, [
-      byAccount.length ? catBars(byAccount, spent, null, { bars: false }) : el('p', { class: 'empty', text: '지출 내역이 없어요.' }),
-    ]),
-    card({ title: '월별 수입과 지출', sub: '최근 12개월' }, [
-      el('div', { class: 'legend', style: 'margin:0 0 6px' }, [
-        el('span', { class: 'li' }, [el('span', { class: 'sw', style: 'background:var(--in)' }), '수입']),
-        el('span', { class: 'li' }, [el('span', { class: 'sw', style: 'background:var(--out)' }), '지출']),
+    el('div', { class: 'split' }, [
+      card({ title: '월별 수입과 지출', sub: '최근 12개월' }, [
+        el('div', { class: 'legend', style: 'margin:0 0 6px' }, [
+          el('span', { class: 'li' }, [el('span', { class: 'sw', style: 'background:var(--in)' }), '수입']),
+          el('span', { class: 'li' }, [el('span', { class: 'sw', style: 'background:var(--out)' }), '지출']),
+        ]),
+        chartBox((b) => groupedBarChart(b, groups, { series: ['수입', '지출'], height: 158 }), 158),
       ]),
-      chartBox((b) => groupedBarChart(b, groups, { series: ['수입', '지출'], height: 158 }), 158),
+      bigSpendCard(),
     ]),
   ];
 }
@@ -872,13 +877,45 @@ function viewAssets() {
             ]);
           }),
         ]))),
-      card({ title: '자산 구성', sub: '어디에 얼마나 들어있나' }, [
-        assetAccounts.length ? catBars(assetAccounts, nw.assets) : el('p', { class: 'empty', text: '계좌를 등록하면 구성이 보여요.' }),
+      el('div', { class: 'colstack' }, [
+        card({ title: '자산 구성', sub: '어디에 얼마나 들어있나' }, [
+          assetAccounts.length ? catBars(assetAccounts, nw.assets) : el('p', { class: 'empty', text: '계좌를 등록하면 구성이 보여요.' }),
+        ]),
+        debtCard(nw.bal),
       ]),
     ]),
     ...spendingCards(),
     hiddenCard(hiddenAccounts, nw.bal),
   ];
+}
+
+/** 빚이 어디에 얼마나 있나 — 자산 구성의 짝 */
+function debtCard(bal) {
+  const rows = store.visibleAccounts()
+    .map((a, i) => ({ id: a.id, name: a.name, emoji: ACCOUNT_TYPES[a.type]?.emoji || '🧾', slot: (i % 8) + 1, value: Math.max(0, -(bal[a.id] || 0)) }))
+    .filter((r) => r.value > 0)
+    .sort((a, b) => b.value - a.value);
+  if (!rows.length) return null;
+  const total = sum(rows, (r) => r.value);
+  return card({ title: '부채 구성', sub: `갚아야 할 돈 ${won(total)}` }, [catBars(rows, total)]);
+}
+
+/** 이번 기간에 크게 나간 몇 건 — 숫자만 보면 놓치는 것들 */
+function bigSpendCard() {
+  const { from, to } = periodRange(ui.grain, ui.anchor);
+  const rows = store.inRange(from, to).filter((x) => x.kind === 'expense')
+    .sort((a, b) => b.amount - a.amount).slice(0, 5);
+  if (!rows.length) return null;
+  return card({ title: '크게 나간 돈', sub: `${periodLabel(ui.grain, ui.anchor)} 상위 ${rows.length}건` }, [
+    el('div', {}, rows.map((x) => el('button', { class: 'txn', onclick: () => openTxnSheet(x) }, [
+      el('span', { class: 'ico', text: txnIcon(x) }),
+      el('span', { class: 'body' }, [
+        el('span', { class: 't1', text: txnTitle(x) }),
+        el('span', { class: 't2', text: `${shortDate(x.date)} · ${catOf(x)?.name || '분류 없음'}` }),
+      ]),
+      el('span', { class: 'amt num', text: wonPlain(x.amount) }),
+    ]))),
+  ]);
 }
 
 /** 숨겨 둔 계좌 — 위 숫자에는 안 들어가지만 어딘가에는 남아 있어야 한다 */
