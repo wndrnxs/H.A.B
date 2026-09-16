@@ -46,7 +46,9 @@ function defaultConfig() {
       { id: 'a_savings', name: '적금·청약', type: 'savings', opening: 12400000 },
       { id: 'a_invest', name: '주식·ETF', type: 'invest', opening: 8600000 },
       { id: 'a_deposit', name: '전세보증금', type: 'deposit', opening: 220000000 },
-      { id: 'a_jeonse', name: '전세자금대출', type: 'loan', opening: -150000000 },
+      { id: 'a_jeonse', name: '전세자금대출', type: 'loan', opening: -150000000, principal: 150000000 },
+      { id: 'a_loan_car', name: '자동차 대출', type: 'loan', opening: -12800000, principal: 20000000 },
+      { id: 'a_loan_credit', name: '신용대출', type: 'loan', opening: -7300000, principal: 10000000 },
     ],
     categories: [
       { id: 'c_food', name: '식비', emoji: '🍚', kind: 'expense', budget: 700000 },
@@ -139,6 +141,11 @@ function sampleTxns(config) {
     // 고정 지출 — 전세는 '이자만 지출, 원금상환은 이체'로 적는다
     push(day(25), 'expense', between(425000, 445000, 10), { categoryId: 'c_loan', accountId: 'a_living', memo: '전세자금대출 이자' });
     push(day(25), 'transfer', 300000, { accountId: 'a_living', toAccountId: 'a_jeonse', memo: '전세대출 원금상환' });
+    // 자동차·신용 대출은 원리금균등이라 매달 같은 돈을 내고, 이자와 원금 비중만 조금씩 바뀐다
+    push(day(10), 'expense', between(38000, 44000, 10), { categoryId: 'c_loan', accountId: 'a_living', loanId: 'a_loan_car', memo: '자동차 대출 이자' });
+    push(day(10), 'transfer', 412000, { accountId: 'a_living', toAccountId: 'a_loan_car', memo: '자동차 대출 원금상환' });
+    push(day(17), 'expense', between(29000, 34000, 10), { categoryId: 'c_loan', accountId: 'a_living', loanId: 'a_loan_credit', memo: '신용대출 이자' });
+    push(day(17), 'transfer', 318000, { accountId: 'a_living', toAccountId: 'a_loan_credit', memo: '신용대출 원금상환' });
     push(day(5), 'expense', between(120000, 210000, 1000), { categoryId: 'c_home', accountId: 'a_living', memo: '관리비·공과금' });
     push(day(12), 'expense', 55000, { categoryId: 'c_tel', accountId: 'a_living', memberId: 'm_me', memo: '휴대폰 요금' });
     push(day(12), 'expense', 49000, { categoryId: 'c_tel', accountId: 'a_living', memberId: 'm_partner', memo: '휴대폰 요금' });
@@ -148,8 +155,8 @@ function sampleTxns(config) {
     push(day(26), 'transfer', 800000, { accountId: 'a_salary1', toAccountId: 'a_savings', memo: '적금 자동이체' });
     push(day(26), 'transfer', 500000, { accountId: 'a_salary2', toAccountId: 'a_invest', memo: '적립식 ETF' });
     // 공동 통장 분담금 — 누가 넣었는지 남겨 두면 통계에서 분담 비율이 보인다
-    push(day(27), 'transfer', 1700000, { accountId: 'a_salary1', toAccountId: 'a_living', memberId: 'm_me', memo: '생활비 분담금' });
-    push(day(27), 'transfer', 1400000, { accountId: 'a_salary2', toAccountId: 'a_living', memberId: 'm_partner', memo: '생활비 분담금' });
+    push(day(27), 'transfer', 2400000, { accountId: 'a_salary1', toAccountId: 'a_living', memberId: 'm_me', memo: '생활비 분담금' });
+    push(day(27), 'transfer', 1900000, { accountId: 'a_salary2', toAccountId: 'a_living', memberId: 'm_partner', memo: '생활비 분담금' });
 
     // 반려견
     push(day(8), 'expense', between(52000, 78000, 500), { categoryId: 'c_dog', accountId: 'a_card', memberId: 'm_dog', memo: pick(['사료 정기배송', '사료 + 간식']) });
@@ -660,6 +667,8 @@ class Store {
       accountId: input.accountId || null,
       toAccountId: input.kind === 'transfer' ? input.toAccountId || null : null,
       memberId: input.memberId || null,
+      // 이자 지출이 어느 대출에 대한 것인지. 대출별 낸 이자 합계를 내는 데 쓴다.
+      loanId: input.loanId || null,
       memo: (input.memo || '').trim(),
       sample: false,
       updatedAt: Date.now(),

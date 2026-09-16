@@ -576,6 +576,201 @@ function viewStats() {
 
 // ── 자산 ─────────────────────────────────────────────────────────────────
 
+/**
+ * 갚는 중인 대출 현황.
+ *
+ * 매달 내는 돈은 '이자 + 원금' 이다. 이자만 지출이고 원금은 빚이 줄어드는 것이라
+ * 지출이 아니다. 그래서 이 앱은 이자를 지출로, 원금을 통장→대출계좌 이체로 적는다.
+ * 여기서는 그렇게 쌓인 기록을 대출별로 모아 얼마나 갚았는지 보여 준다.
+ */
+function loanCard() {
+  const loans = store.config.accounts.filter((a) => ACCOUNT_TYPES[a.type]?.liability && a.type === 'loan');
+  if (!loans.length) return null;
+
+  const bal = store.balances();
+  const all = store.txns();
+  const now = today();
+
+  const rows = loans.map((a) => {
+    const remaining = Math.max(0, -(bal[a.id] || 0));
+    const principal = Number(a.principal) || 0;
+    const repaid = principal ? Math.max(0, principal - remaining) : 0;
+    const ratio = principal ? Math.min(1, repaid / principal) : 0;
+
+    // 최근 3개월(이번 달 제외)에 넣은 원금으로 갚는 속도를 잡는다.
+    // 기록이 없는 달까지 나누면 속도가 실제보다 느리게 나와 완주 예상이 엉뚱해진다.
+    const monthly = [];
+    for (let back = 1; back <= 3; back += 1) {
+      const s = startOfMonth(addMonths(now, -back));
+      const e = endOfMonth(s);
+      const paid = sum(all.filter((x) => x.kind === 'transfer' && x.toAccountId === a.id && x.date >= s && x.date <= e), (x) => x.amount);
+      if (paid > 0) monthly.push(paid);
+    }
+    const pace = monthly.length ? sum(monthly) / monthly.length : 0;
+    const interest = sum(all.filter((x) => x.kind === 'expense' && x.loanId === a.id), (x) => x.amount);
+
+    let eta = null;
+    if (remaining > 0 && pace > 0) {
+      const months = Math.ceil(remaining / pace);
+      if (months <= 600) {
+        const d = fromYMD(addMonths(now, months));
+        eta = `이 속도면 ${d.getFullYear()}년 ${d.getMonth() + 1}월쯤 끝나요`;
+      }
+    }
+    return { a, remaining, principal, repaid, ratio, pace, interest, eta, months: monthly.length };
+  });
+
+  const totalLeft = sum(rows, (r) => r.remaining);
+
+  return card({
+    title: '갚는 중인 대출',
+    sub: `남은 빚 ${won(totalLeft)}`,
+    actions: [el('button', { class: 'btn sm', text: '＋ 상환 적기', onclick: () => openRepaySheet() })],
+  }, rows.map((r) => el('div', { class: 'catrow' }, [
+    el('span', { class: 'name', text: `${ACCOUNT_TYPES[r.a.type].emoji} ${r.a.name}` }),
+    el('span', { class: 'val num', text: won(r.remaining) }),
+    r.principal
+      ? el('span', { class: 'track' }, [el('span', { class: 'fill', style: `width:${r.ratio * 100}%;background:var(--good)` })])
+      : null,
+    el('span', { class: 'meta' }, r.principal
+      ? [
+        el('span', {
+          style: 'color:var(--good);font-weight:600',
+          text: `${(r.ratio * 100).toFixed(r.ratio > 0 && r.ratio < 0.1 ? 1 : 0)}% 갚음`,
+        }),
+        el('span', { text: `처음 ${wonShort(r.principal)} · 갚은 원금 ${wonShort(r.repaid)}` }),
+        r.interest ? el('span', { text: `낸 이자 ${wonShort(r.interest)}` }) : null,
+      ]
+      : [
+        el('span', { text: '처음 빌린 금액을 넣으면 얼마나 갚았는지 보여요.' }),
+        el('button', {
+          class: 'btn sm', style: 'padding:2px 8px',
+          text: '입력', onclick: () => openPrincipalSheet(r.a),
+        }),
+      ]),
+    r.pace > 0
+      ? el('span', { class: 'meta' }, [
+        el('span', { text: `최근 ${r.months}개월 평균 원금 ${wonShort(r.pace)}/월` }),
+        r.eta ? el('span', { text: r.eta }) : null,
+      ])
+      : null,
+  ])));
+}
+
+/** 처음 빌린 금액만 받는 작은 시트 */
+function openPrincipalSheet(account) {
+  let value = Number(account.principal) || null;
+  openSheet(`${account.name} — 처음 빌린 금액`, [
+    el('p', { style: 'font-size:13px;color:var(--ink-2);margin:0 0 12px', text: '대출을 처음 받았을 때의 금액이에요. 지금 남은 빚이 아니라요. 이걸 알아야 몇 퍼센트 갚았는지 계산할 수 있어요.' }),
+    el('div', { class: 'field amount' }, [
+      el('label', { for: 'loan-principal', text: '처음 빌린 금액 (원)' }),
+      moneyInput({ value, label: '처음 빌린 금액', placeholder: '0', onCommit: (v) => { value = v; } }),
+    ]),
+  ], [
+    el('button', {
+      class: 'btn primary', text: '저장',
+      onclick: async () => {
+        const i = store.config.accounts.findIndex((x) => x.id === account.id);
+        if (i >= 0) await store.saveConfig({
+          accounts: store.config.accounts.map((x, k) => (k === i ? { ...x, principal: Math.abs(value || 0) || null } : x)),
+        });
+        closeSheet();
+        toast('처음 빌린 금액을 저장했어요');
+      },
+    }),
+  ]);
+}
+
+/**
+ * 대출 상환 한 번을 두 건으로 나눠 적는다.
+ * 통장에서 빠지는 총액은 하나지만, 이자는 지출이고 원금은 빚이 줄어드는 이체다.
+ */
+function openRepaySheet(preset) {
+  const loans = store.config.accounts.filter((a) => a.type === 'loan');
+  const payFrom = store.config.accounts.filter((a) => a.type === 'bank' || a.type === 'cash');
+  const interestCat = store.config.categories.find((c) => c.id === 'c_loan')
+    || store.config.categories.find((c) => c.kind === 'expense' && c.name.includes('이자'))
+    || store.config.categories.find((c) => c.kind === 'expense');
+
+  const draft = {
+    loanId: preset || loans[0]?.id || null,
+    accountId: payFrom[0]?.id || store.config.accounts[0]?.id || null,
+    date: today(),
+    total: '',
+    interest: '',
+  };
+  const body = el('div', {});
+
+  const draw = () => {
+    const principalPart = Math.max(0, (Number(draft.total) || 0) - (Number(draft.interest) || 0));
+    body.replaceChildren(
+      el('div', { class: 'row2' }, [
+        el('div', { class: 'field' }, [
+          el('label', { for: 'rp-loan', text: '어느 대출' }),
+          el('select', { id: 'rp-loan', onchange: (e) => { draft.loanId = e.target.value; } },
+            loans.map((a) => el('option', { value: a.id, text: a.name, selected: draft.loanId === a.id }))),
+        ]),
+        el('div', { class: 'field' }, [
+          el('label', { for: 'rp-from', text: '어디서 빠져나가나' }),
+          el('select', { id: 'rp-from', onchange: (e) => { draft.accountId = e.target.value; } },
+            payFrom.map((a) => el('option', { value: a.id, text: a.name, selected: draft.accountId === a.id }))),
+        ]),
+      ]),
+      el('div', { class: 'field' }, [
+        el('label', { for: 'rp-date', text: '날짜' }),
+        el('input', { id: 'rp-date', type: 'date', value: draft.date, onchange: (e) => { draft.date = e.target.value || today(); } }),
+      ]),
+      el('div', { class: 'field amount' }, [
+        el('label', { text: '이번 달 낸 돈 (총액)' }),
+        moneyInput({ value: draft.total === '' ? null : draft.total, placeholder: '0', label: '총 납입액', onCommit: (v) => { draft.total = v ?? ''; draw(); } }),
+      ]),
+      el('div', { class: 'field' }, [
+        el('label', { text: '그중 이자' }),
+        moneyInput({ value: draft.interest === '' ? null : draft.interest, placeholder: '0', label: '이자', onCommit: (v) => { draft.interest = v ?? ''; draw(); } }),
+        el('span', { class: 'hint', text: '은행 앱이나 상환 안내에 이자와 원금이 나뉘어 적혀 있어요.' }),
+      ]),
+      el('div', { class: 'banner', style: 'margin-top:4px' }, [
+        el('span', {}, [
+          '원금 ', el('b', { class: 'num', text: won(principalPart) }), ' 이 빚에서 줄고, 이자 ',
+          el('b', { class: 'num', text: won(Number(draft.interest) || 0) }), ' 만 지출로 잡혀요.',
+        ]),
+      ]),
+    );
+  };
+  draw();
+
+  openSheet('대출 상환 적기', [body], [
+    el('button', {
+      class: 'btn primary', text: '저장',
+      onclick: async () => {
+        const total = Number(draft.total) || 0;
+        const interest = Number(draft.interest) || 0;
+        if (total <= 0) { toast('이번 달 낸 총액을 넣어 주세요'); return; }
+        if (interest > total) { toast('이자가 총액보다 클 수는 없어요'); return; }
+        if (!draft.loanId || !draft.accountId) { toast('대출과 출금 계좌를 골라 주세요'); return; }
+        const loan = store.account(draft.loanId);
+        const principalPart = total - interest;
+        if (interest > 0) {
+          await store.saveTxn({
+            kind: 'expense', date: draft.date, amount: interest,
+            categoryId: interestCat?.id || null, accountId: draft.accountId,
+            loanId: draft.loanId, memo: `${loan?.name || '대출'} 이자`,
+          });
+        }
+        if (principalPart > 0) {
+          await store.saveTxn({
+            kind: 'transfer', date: draft.date, amount: principalPart,
+            accountId: draft.accountId, toAccountId: draft.loanId,
+            memo: `${loan?.name || '대출'} 원금상환`,
+          });
+        }
+        closeSheet();
+        toast('상환을 적었어요');
+      },
+    }),
+  ]);
+}
+
 function viewAssets() {
   const nw = store.netWorth();
   const months = monthSeries(12);
@@ -614,6 +809,7 @@ function viewAssets() {
       ]),
     ]),
     card({ title: '자산 흐름', sub: '매월 말 순자산', actions: [t.btn] }, [t.node]),
+    loanCard(),
     el('div', { class: 'split' }, [
       card({ title: '계좌별 잔액', actions: [el('button', { class: 'btn sm ghost', text: '계좌 관리', onclick: () => setUi({ page: 'settings' }) })] },
         byType.map((g) => el('div', {}, [
