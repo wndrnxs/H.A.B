@@ -15,7 +15,7 @@ export const ui = {
   page: 'dashboard',
   grain: 'month',
   anchor: today(),
-  filter: { kind: 'all', memberId: 'all', categoryId: 'all', accountId: 'all', q: '' },
+  filter: { kind: 'all', categoryId: 'all', accountId: 'all', q: '' },
   tables: {},
 };
 
@@ -115,12 +115,6 @@ function moneyInput({ value, onCommit, label, placeholder, width, allowNegative 
   });
 }
 
-function memberName(id) {
-  if (!id) return '공동';
-  const m = store.member(id);
-  return m ? `${m.emoji} ${m.name}` : '기타';
-}
-
 function catOf(t) {
   return store.category(t.categoryId);
 }
@@ -140,11 +134,9 @@ function txnSub(t) {
   const bits = [];
   if (t.kind === 'transfer') {
     bits.push(`${store.account(t.accountId)?.name || '?'} → ${store.account(t.toAccountId)?.name || '?'}`);
-    if (t.memberId) bits.push(memberName(t.memberId));
   } else {
     if (catOf(t)) bits.push(catOf(t).name);
     if (store.account(t.accountId)) bits.push(store.account(t.accountId).name);
-    bits.push(memberName(t.memberId));
   }
   return bits.join(' · ');
 }
@@ -320,14 +312,6 @@ function sharedAccountCard() {
   const moved = sum(list.filter((t) => t.kind === 'transfer' && t.accountId === id), (t) => t.amount);
   const balance = store.balances(to)[id] || 0;
 
-  const people = [...store.config.members.map((m) => ({ id: m.id, name: m.name, emoji: m.emoji })), { id: null, name: '누구인지 안 적음', emoji: '❔' }];
-  const shares = people
-    .map((m, i) => ({
-      ...m, slot: i + 1,
-      value: sum(inflow.filter((x) => (m.id ? x.memberId === m.id : !x.memberId)), (x) => x.amount),
-    }))
-    .filter((m) => m.value > 0);
-
   const lastFilled = (() => {
     for (let back = 1; back <= 6; back += 1) {
       const a = startOfMonth(addMonths(ui.anchor, -back));
@@ -354,20 +338,15 @@ function sharedAccountCard() {
       el('div', { class: 'kv' }, [el('span', { class: 'k', text: '옮긴 돈' }), el('span', { class: 'v', text: won(moved) }), el('span', { class: 'k', text: '카드값·상환 등' })]),
       el('div', { class: 'kv' }, [el('span', { class: 'k', text: '남은 잔액' }), el('span', { class: `v ${balance < 0 ? 'out' : ''}`, text: won(balance) })]),
     ]),
-    shares.length
-      ? el('div', {}, [
-        el('div', { class: 'stack', role: 'img', 'aria-label': `분담 비율: ${shares.map((s) => `${s.name} ${Math.round((s.value / filled) * 100)}퍼센트`).join(', ')}` },
-          shares.map((s) => el('span', { style: `width:${(s.value / filled) * 100}%;background:var(--s${s.slot})` }))),
-        el('div', { class: 'legend' }, shares.map((s) => el('span', { class: 'li' }, [
-          el('span', { class: 'sw', style: `background:var(--s${s.slot})` }),
-          `${s.emoji} ${s.name} ${won(s.value)} (${((s.value / filled) * 100).toFixed(0)}%)`,
-        ]))),
+    filled > 0
+      ? el('div', { class: 'stack', role: 'img', 'aria-label': `채운 돈 대비 나간 돈 ${Math.round(((spent + moved) / filled) * 100)}퍼센트` }, [
+        el('span', { style: `width:${Math.min(100, ((spent + moved) / filled) * 100)}%;background:var(--accent)` }),
       ])
       : el('p', {
         class: 'empty', style: 'padding:14px 10px',
         text: lastFilled
           ? `이번 달은 아직 채운 내역이 없어요. ${lastFilled.month}월에는 ${won(lastFilled.amount)}을 넣었어요.`
-          : '이 통장으로 돈을 옮길 때 이체로 적고 “누가 넣은 돈”을 골라 두면, 이번 달 분담이 여기에 보여요.',
+          : '이 통장으로 돈을 옮길 때 이체로 적어 두면, 이번 달 채운 돈과 쓴 돈이 여기에 보여요.',
       }),
     spent + moved > filled && filled > 0
       ? el('p', { style: 'font-size:12px;color:var(--warn);margin:10px 0 0', text: `이번 달은 채운 돈보다 ${won(spent + moved - filled)} 더 나갔어요.` })
@@ -425,7 +404,6 @@ function filtered(list) {
   const q = f.q.trim().toLowerCase();
   return list.filter((t) => {
     if (f.kind !== 'all' && t.kind !== f.kind) return false;
-    if (f.memberId !== 'all' && (f.memberId === 'shared' ? t.memberId : t.memberId !== f.memberId)) return false;
     if (f.categoryId !== 'all' && t.categoryId !== f.categoryId) return false;
     if (f.accountId !== 'all' && t.accountId !== f.accountId && t.toAccountId !== f.accountId) return false;
     if (q && !`${txnTitle(t)} ${txnSub(t)}`.toLowerCase().includes(q)) return false;
@@ -486,11 +464,6 @@ function viewTxns() {
       chip('지출', f.kind === 'expense', () => setFilter({ kind: 'expense' })),
       chip('수입', f.kind === 'income', () => setFilter({ kind: 'income' })),
       chip('이체', f.kind === 'transfer', () => setFilter({ kind: 'transfer' })),
-    ]),
-    el('div', { class: 'chips', style: 'margin-bottom:8px' }, [
-      chip('누구나', f.memberId === 'all', () => setFilter({ memberId: 'all' })),
-      chip('🏠 공동', f.memberId === 'shared', () => setFilter({ memberId: 'shared' })),
-      ...store.config.members.map((m) => chip(`${m.emoji} ${m.name}`, f.memberId === m.id, () => setFilter({ memberId: m.id }))),
     ]),
     el('div', { class: 'row2' }, [
       el('select', {
@@ -555,19 +528,13 @@ function viewStats() {
   const prev = comparePrev(ui.grain, ui.anchor);
   const list = store.inRange(from, to);
   const spent = sum(list.filter((t) => t.kind === 'expense'), (t) => t.amount);
-  const { rows, all } = categoryBreakdown(list, 9);
+  // 계열색은 여덟 개까지다. 아홉 번째는 색이 없어 막대가 비어 보였다.
+  const { rows, all } = categoryBreakdown(list);
   const prevBreak = categoryBreakdown(store.inRange(prev.from, prev.to), 99);
   const prevMap = new Map(prevBreak.all.map((r) => [r.id, r.value]));
 
   const catTable = withTable('stats-cat', catBars(rows, spent, prevMap),
     () => dataTable(['분류', '금액', '비중'], all.map((r) => [`${r.emoji} ${r.name}`, won(r.value), `${((r.value / (spent || 1)) * 100).toFixed(1)}%`])));
-
-  // 사람별 — 강아지 몫이 얼마인지 바로 보이게
-  const people = [{ id: 'shared', name: '공동', emoji: '🏠' }, ...store.config.members];
-  const byMember = people.map((p, i) => ({
-    ...p, slot: i + 1,
-    value: sum(list.filter((t) => t.kind === 'expense' && (p.id === 'shared' ? !t.memberId : t.memberId === p.id)), (t) => t.amount),
-  })).filter((p) => p.value > 0);
 
   const byAccount = store.config.accounts.map((a, i) => ({
     id: a.id, name: a.name, emoji: ACCOUNT_TYPES[a.type]?.emoji || '💳', slot: (i % 8) + 1,
@@ -587,18 +554,15 @@ function viewStats() {
   });
 
   return [
-    card({ title: '분류별 지출', sub: `${periodLabel(ui.grain, ui.anchor)} · 총 ${won(spent)}`, actions: [catTable.btn] }, [catTable.node]),
-    el('div', { class: 'split' }, [
-      card({ title: '누구에게 쓴 돈인가', sub: '공동 지출과 개인 지출' }, [
-        chartBox((b) => donutChart(b, byMember.map((p) => ({ label: p.name, value: p.value, slot: p.slot, emoji: p.emoji })), { size: 180, centerLabel: '기간 지출' }), 180),
-        el('div', { class: 'legend' }, byMember.map((p) => el('span', { class: 'li' }, [
-          el('span', { class: 'sw', style: `background:var(--s${p.slot})` }),
-          `${p.emoji} ${p.name} ${won(p.value)}`,
-        ]))),
+    // 도넛으로 비율을, 옆 목록으로 금액과 증감을 본다. 목록의 색칩이 곧 범례다.
+    card({ title: '분류별 지출', sub: `${periodLabel(ui.grain, ui.anchor)} · 총 ${won(spent)}`, actions: [catTable.btn] }, [
+      el('div', { class: 'split' }, [
+        catTable.node,
+        chartBox((b) => donutChart(b, rows.map((r) => ({ label: r.name, value: r.value, slot: r.slot, emoji: r.emoji })), { size: 200 }), 200),
       ]),
-      card({ title: '결제수단별', sub: '무엇으로 결제했나' }, [
-        byAccount.length ? catBars(byAccount, spent) : el('p', { class: 'empty', text: '지출 내역이 없어요.' }),
-      ]),
+    ]),
+    card({ title: '결제수단별', sub: '어느 통장·카드에서 나갔나' }, [
+      byAccount.length ? catBars(byAccount, spent) : el('p', { class: 'empty', text: '지출 내역이 없어요.' }),
     ]),
     card({ title: '월별 수입과 지출', sub: '최근 12개월' }, [
       el('div', { class: 'legend', style: 'margin:0 0 6px' }, [
@@ -709,30 +673,6 @@ function viewSettings() {
       }))),
     ]),
   ]));
-
-  out.push(card({
-    title: '함께 쓰는 사람',
-    sub: '지출을 누구 몫으로 남길지 고를 때 쓰여요',
-    actions: [el('button', {
-      class: 'btn sm', text: '+ 추가',
-      onclick: () => store.saveConfig({ members: [...cfg.members, { id: uid('m_'), name: '새 구성원', emoji: '🙂' }] }),
-    })],
-  }, [sortableList('members', cfg.members, (m, i) => el('div', { class: 'listline' }, [
-    el('button', {
-      class: 'emoji-btn', type: 'button', text: m.emoji, 'aria-label': `${m.name} 아이콘 바꾸기`,
-      onclick: () => openEmojiSheet(m.emoji, (emo) => patchList('members', i, { emoji: emo })),
-    }),
-    el('input', {
-      type: 'text', value: m.name, 'aria-label': '이름',
-      onchange: (e) => patchList('members', i, { name: e.target.value.trim() || '이름 없음' }),
-    }),
-    el('span', { class: 'spacer' }),
-    el('button', {
-      class: 'btn sm danger', text: '삭제',
-      onclick: () => confirmThen(`'${m.name}' 을(를) 목록에서 지울까요? 이미 기록한 내역은 공동 지출로 남아요.`,
-        () => store.saveConfig({ members: cfg.members.filter((x) => x.id !== m.id) })),
-    }),
-  ]))]));
 
   out.push(card({
     title: '분류와 예산',
@@ -1220,7 +1160,7 @@ export function openTxnSheet(existing) {
     categoryId: store.config.categories.find((c) => c.kind === 'expense')?.id || null,
     accountId: store.config.accounts[0]?.id || null,
     toAccountId: store.config.accounts[1]?.id || null,
-    memberId: null, memo: '',
+    memo: '',
   };
   const body = el('div', {});
 
@@ -1274,16 +1214,6 @@ export function openTxnSheet(existing) {
             onclick: () => { draft.categoryId = c.id; draw(); },
           }))),
         ]),
-      el('div', { class: 'field' }, [
-        el('label', { text: draft.kind === 'transfer' ? '누가 넣은 돈' : '누구 몫' }),
-        el('div', { class: 'picker' }, [
-          el('button', { 'aria-pressed': !draft.memberId ? 'true' : 'false', text: '🏠 공동', onclick: () => { draft.memberId = null; draw(); } }),
-          ...store.config.members.map((m) => el('button', {
-            'aria-pressed': draft.memberId === m.id ? 'true' : 'false', text: `${m.emoji} ${m.name}`,
-            onclick: () => { draft.memberId = m.id; draw(); },
-          })),
-        ]),
-      ]),
       el('div', { class: 'field' }, [
         el('label', { for: 'tx-memo', text: '메모' }),
         el('input', { id: 'tx-memo', type: 'text', value: draft.memo || '', placeholder: '예: 봄이 사료, 장보기', onchange: (e) => { draft.memo = e.target.value; }, oninput: (e) => { draft.memo = e.target.value; } }),

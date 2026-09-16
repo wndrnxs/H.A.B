@@ -49,8 +49,6 @@ function render() {
     el('nav', { class: 'nav', 'aria-label': '주요 화면' }, PAGES.map((p) => navButton(p, page.id))),
     el('button', { class: 'btn primary', text: '＋ 내역 적기', onclick: () => openTxnSheet(null) }),
     el('div', { class: 'rail-foot' }, [
-      el('div', { class: 'eyebrow', text: '함께 쓰는 사람' }),
-      el('div', { class: 'members-mini' }, store.config.members.map((m) => el('div', { class: 'm', text: `${m.emoji} ${m.name}` }))),
       el('span', { class: 'sync-pill' }, [
         el('span', { class: `sync-dot ${store.status === 'local' ? 'local' : ''}` }),
         {

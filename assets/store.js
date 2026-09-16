@@ -30,6 +30,8 @@ function defaultConfig() {
       startPage: 'dashboard',
       sharedAccountId: 'a_living',
     },
+    // 지출을 사람별로 나누는 기능은 걷어냈다(통장을 사람별로 나눠 쓰기로 했다).
+    // 이미 서버에 올라간 장부와 옛 기록이 이 항목을 갖고 있어 자리만 남겨 둔다.
     members: [
       { id: 'm_me', name: '나', emoji: '🙋', slot: 1 },
       { id: 'm_partner', name: '예비신부', emoji: '💍', slot: 2 },
@@ -611,10 +613,6 @@ class Store {
 
   account(id) {
     return this.config.accounts.find((a) => a.id === id) || null;
-  }
-
-  member(id) {
-    return this.config.members.find((m) => m.id === id) || null;
   }
 
   hasSamples() {
