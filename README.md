@@ -88,8 +88,11 @@ firebase deploy --only firestore:rules
 
 ### 4. 주소 등록
 
-- **Firebase Hosting 으로 배포한다면** (`firebase deploy --only hosting`) 추가 설정이 없습니다.
-  주소는 <https://house-ab.web.app> 이 됩니다.
+- **Firebase Hosting** — 주소는 <https://house-ab.web.app>. 로그인 도메인이 자동으로
+  등록돼 있어 추가 설정이 없습니다. `.github/workflows/firebase-hosting.yml` 이
+  push 마다 자동 배포하며, 저장소 시크릿 `FIREBASE_SERVICE_ACCOUNT` 에 배포용
+  서비스 계정 키(JSON)를 넣어 두면 동작합니다. 터미널을 쓴다면
+  `firebase deploy --only hosting` 한 줄로도 같은 일을 합니다.
 - **GitHub Pages 를 쓴다면** 콘솔 → Authentication → 설정 → **승인된 도메인** 에
   `wndrnxs.github.io` 를 추가해야 로그인이 됩니다.
 
