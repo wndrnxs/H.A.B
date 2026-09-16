@@ -22,10 +22,9 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      # enablement: 저장소 설정에서 손대지 않아도 Pages 를 알아서 켠다
+      # Pages 는 저장소 Settings → Pages 에서 Source 를 'GitHub Actions' 로
+      # 한 번 바꿔 줘야 한다. enablement: true 는 기본 토큰 권한으로는 막힌다.
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: .
