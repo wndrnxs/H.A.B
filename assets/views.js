@@ -717,10 +717,10 @@ function viewSettings() {
       class: 'btn sm', text: '+ 추가',
       onclick: () => store.saveConfig({ members: [...cfg.members, { id: uid('m_'), name: '새 구성원', emoji: '🙂' }] }),
     })],
-  }, cfg.members.map((m, i) => el('div', { class: 'listline' }, [
-    el('input', {
-      type: 'text', value: m.emoji, style: 'width:52px;text-align:center', 'aria-label': `${m.name} 이모지`,
-      onchange: (e) => patchList('members', i, { emoji: e.target.value.trim() || '🙂' }),
+  }, [sortableList('members', cfg.members, (m, i) => el('div', { class: 'listline' }, [
+    el('button', {
+      class: 'emoji-btn', type: 'button', text: m.emoji, 'aria-label': `${m.name} 아이콘 바꾸기`,
+      onclick: () => openEmojiSheet(m.emoji, (emo) => patchList('members', i, { emoji: emo })),
     }),
     el('input', {
       type: 'text', value: m.name, 'aria-label': '이름',
@@ -732,19 +732,19 @@ function viewSettings() {
       onclick: () => confirmThen(`'${m.name}' 을(를) 목록에서 지울까요? 이미 기록한 내역은 공동 지출로 남아요.`,
         () => store.saveConfig({ members: cfg.members.filter((x) => x.id !== m.id) })),
     }),
-  ]))));
+  ]))]));
 
   out.push(card({
     title: '분류와 예산',
-    sub: '월 예산을 비워 두면 예산 관리에서 빠져요',
+    sub: '끌어서 순서를 바꾸고, 아이콘을 눌러 고릅니다 · 월 예산을 비우면 예산 관리에서 빠져요',
     actions: [el('button', {
       class: 'btn sm', text: '+ 지출 분류',
       onclick: () => store.saveConfig({ categories: [...cfg.categories, { id: uid('c_'), name: '새 분류', emoji: '🏷️', kind: 'expense', budget: null }] }),
     })],
-  }, cfg.categories.map((c, i) => el('div', { class: 'listline' }, [
-    el('input', {
-      type: 'text', value: c.emoji, style: 'width:52px;text-align:center', 'aria-label': `${c.name} 이모지`,
-      onchange: (e) => patchList('categories', i, { emoji: e.target.value.trim() || '🏷️' }),
+  }, [sortableList('categories', cfg.categories, (c, i) => el('div', { class: 'listline' }, [
+    el('button', {
+      class: 'emoji-btn', type: 'button', text: c.emoji, 'aria-label': `${c.name} 아이콘 바꾸기`,
+      onclick: () => openEmojiSheet(c.emoji, (emo) => patchList('categories', i, { emoji: emo })),
     }),
     el('input', {
       type: 'text', value: c.name, 'aria-label': '분류 이름',
@@ -760,16 +760,16 @@ function viewSettings() {
       onclick: () => confirmThen(`'${c.name}' 분류를 지울까요? 이 분류로 적어둔 내역은 '분류 없음'이 돼요.`,
         () => store.saveConfig({ categories: cfg.categories.filter((x) => x.id !== c.id) })),
     }),
-  ]))));
+  ]))]));
 
   out.push(card({
     title: '계좌와 결제수단',
-    sub: '대출·카드는 남은 빚을 양수로 적으면 순자산에서 알아서 빼요',
+    sub: '끌어서 순서를 바꿉니다 · 대출·카드는 남은 빚을 양수로 적으면 순자산에서 알아서 빼요',
     actions: [el('button', {
       class: 'btn sm', text: '+ 계좌',
       onclick: () => store.saveConfig({ accounts: [...cfg.accounts, { id: uid('a_'), name: '새 계좌', type: 'bank', opening: 0 }] }),
     })],
-  }, cfg.accounts.map((a, i) => el('div', { class: 'listline' }, [
+  }, [sortableList('accounts', cfg.accounts, (a, i) => el('div', { class: 'listline' }, [
     el('input', {
       type: 'text', value: a.name, 'aria-label': '계좌 이름',
       onchange: (e) => patchList('accounts', i, { name: e.target.value.trim() || '이름 없음' }),
@@ -793,7 +793,7 @@ function viewSettings() {
       onclick: () => confirmThen(`'${a.name}' 계좌를 지울까요?`,
         () => store.saveConfig({ accounts: cfg.accounts.filter((x) => x.id !== a.id) })),
     }),
-  ]))));
+  ]))]));
 
   const json = JSON.stringify(store.exportData(), null, 0);
   const whereText = {
@@ -992,6 +992,127 @@ function shareCard() {
       ),
     }),
   ]);
+}
+
+/**
+ * 목록을 손으로 끌어 순서를 바꾼다.
+ * HTML5 드래그는 폰에서 안 먹어서 포인터 이벤트로 직접 처리한다.
+ * 손잡이(⠿)를 잡았을 때만 움직이므로 입력칸은 그대로 쓸 수 있다.
+ */
+function attachSortable(list, onReorder) {
+  const rowOf = (node) => node.closest('.listline');
+  const commit = () => onReorder([...list.children].map((n) => n.dataset.id));
+
+  list.addEventListener('pointerdown', (e) => {
+    const handle = e.target.closest('.grip');
+    if (!handle) return;
+    e.preventDefault();
+    const row = rowOf(handle);
+    row.classList.add('dragging');
+    list.classList.add('sorting');
+
+    // 이동 이벤트는 window 에서 듣는다. setPointerCapture 를 쓰면 행을 옮기는
+    // 순간(DOM 에서 빠졌다 들어오면서) 캡처가 풀려 드래그가 한 번에 끊긴다.
+    const move = (ev) => {
+      for (const sib of list.children) {
+        if (sib === row) continue;
+        const r = sib.getBoundingClientRect();
+        if (ev.clientY < r.top || ev.clientY > r.bottom) continue;
+        const target = ev.clientY > r.top + r.height / 2 ? sib.nextSibling : sib;
+        // 제자리면 건드리지 않는다 — 괜한 DOM 이동은 깜빡임만 만든다
+        if (target !== row && row.nextSibling !== target) list.insertBefore(row, target);
+        break;
+      }
+    };
+    const up = () => {
+      row.classList.remove('dragging');
+      list.classList.remove('sorting');
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      commit();
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+  });
+
+  // 마우스를 못 쓰는 경우를 위해 방향키로도 옮긴다
+  list.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    const handle = e.target.closest('.grip');
+    if (!handle) return;
+    e.preventDefault();
+    const row = rowOf(handle);
+    const sib = e.key === 'ArrowUp' ? row.previousElementSibling : row.nextElementSibling;
+    if (!sib) return;
+    list.insertBefore(...(e.key === 'ArrowUp' ? [row, sib] : [sib, row]));
+    commit();
+    handle.focus();
+  });
+}
+
+/** 설정의 목록 하나를 끌어서 정렬 가능한 형태로 감싼다 */
+function sortableList(key, items, renderRow) {
+  const list = el('div', { class: 'sortable' }, items.map((item, i) => {
+    const row = renderRow(item, i);
+    row.dataset.id = item.id;
+    row.prepend(el('button', {
+      class: 'grip', type: 'button', text: '⠿',
+      'aria-label': `순서 바꾸기 — 방향키로도 옮길 수 있어요`,
+      title: '끌어서 순서 바꾸기',
+    }));
+    return row;
+  }));
+  attachSortable(list, (order) => {
+    const byId = new Map(store.config[key].map((x) => [x.id, x]));
+    const next = order.map((id) => byId.get(id)).filter(Boolean);
+    for (const item of store.config[key]) if (!next.includes(item)) next.push(item);
+    store.saveConfig({ [key]: next });
+  });
+  return list;
+}
+
+// 가계부에서 자주 쓰는 것들만 추렸다. 없는 건 직접 입력으로.
+const EMOJI_GROUPS = [
+  ['먹는 것', ['🍚', '🍜', '🍕', '🍗', '🍣', '🥗', '🍱', '🍔', '🍰', '☕', '🧋', '🍺', '🍎', '🥕', '🛒', '🧊']],
+  ['집', ['🏠', '🏡', '🛋️', '🛏️', '🚿', '💡', '🔧', '🧻', '🧼', '🪴', '🧺', '🔑']],
+  ['이동', ['🚌', '🚇', '🚗', '🚕', '⛽', '✈️', '🚲', '🛵', '🅿️', '🛣️']],
+  ['생활', ['📱', '💻', '📶', '👕', '👟', '👜', '💄', '✂️', '🎁', '📚', '🎮', '🎬', '🎤', '🏕️', '🏋️', '⚽']],
+  ['건강', ['💊', '🏥', '🦷', '👓', '🩺', '🧘']],
+  ['반려동물', ['🐶', '🐱', '🐾', '🦴', '🐕', '🧸']],
+  ['돈', ['💰', '💵', '💳', '🏦', '📈', '🛡️', '🧾', '💸', '🪙', '🐖', '💼', '🎫']],
+  ['행사', ['💒', '💍', '🎂', '💌', '🎓', '🧧', '🎄', '🎉']],
+  ['그 밖', ['📦', '🏷️', '⭐', '❤️', '🔖', '🙂', '👶', '🌏']],
+];
+
+/** 아이콘 고르기 — 목록에서 누르거나 직접 붙여넣는다 */
+function openEmojiSheet(current, onPick) {
+  const custom = el('input', {
+    type: 'text', value: current, maxlength: 4, style: 'width:90px;text-align:center;font-size:20px',
+    'aria-label': '직접 입력',
+  });
+  const body = [
+    ...EMOJI_GROUPS.flatMap(([name, list]) => [
+      el('div', { class: 'eyebrow', style: 'margin:12px 0 6px', text: name }),
+      el('div', { class: 'emoji-grid' }, list.map((emo) => el('button', {
+        class: 'emoji-btn', type: 'button', text: emo,
+        'aria-pressed': emo === current ? 'true' : 'false',
+        onclick: () => { closeSheet(); onPick(emo); },
+      }))),
+    ]),
+    el('div', { class: 'field', style: 'margin-top:16px' }, [
+      el('label', { text: '직접 입력' }),
+      el('div', { class: 'listline', style: 'border:0;padding:0;gap:8px' }, [
+        custom,
+        el('button', {
+          class: 'btn sm', text: '이걸로',
+          onclick: () => { const v = custom.value.trim(); closeSheet(); onPick(v || current); },
+        }),
+      ]),
+    ]),
+  ];
+  openSheet('아이콘 고르기', body, []);
 }
 
 function patchList(key, index, patch) {

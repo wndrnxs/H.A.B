@@ -345,7 +345,23 @@ table.data td.n { font-family: var(--font-mono); font-variant-numeric: tabular-n
   background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 999px;
   font-size: 13px; box-shadow: var(--shadow);
 }
+.sortable { display: flex; flex-direction: column; }
 .listline { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--grid); }
+.sortable.sorting { user-select: none; cursor: grabbing; }
+.listline.dragging { background: var(--surface-2); border-radius: 10px; box-shadow: var(--shadow); border-bottom-color: transparent; }
+.grip {
+  border: 0; background: none; color: var(--ink-3); padding: 4px 2px; font-size: 15px;
+  line-height: 1; flex: none; border-radius: 6px; cursor: grab; touch-action: none;
+}
+.grip:hover { color: var(--ink); background: var(--surface-2); }
+.grip:active { cursor: grabbing; }
+.emoji-btn {
+  width: 44px; height: 38px; flex: none; font-size: 19px; line-height: 1;
+  border: 1px solid var(--line); background: var(--surface); border-radius: 9px;
+}
+.emoji-btn:hover { border-color: var(--accent); }
+.emoji-btn[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.emoji-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 6px; }
 .listline:last-child { border-bottom: 0; }
 .listline .spacer { flex: 1; }
 .listline input[type="text"], .listline input[type="number"] {
