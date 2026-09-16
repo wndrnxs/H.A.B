@@ -1,0 +1,938 @@
+// 화면 렌더링. 상태는 ui 객체 하나에 모으고, 바뀌면 전체를 다시 그린다.
+// 데이터 양이 가계부 규모(수천 건)라 이 정도면 충분히 빠르고, 코드가 단순해진다.
+
+import { store, ACCOUNT_TYPES, buildSampleData } from './store.js';
+import { areaChart, barChart, groupedBarChart, donutChart } from './charts.js';
+import {
+  el, won, wonShort, wonPlain, today, toYMD, fromYMD, addMonths, addDays, startOfMonth, endOfMonth,
+  periodRange, periodLabel, shiftPeriod, previousRange, prettyDate, shortDate, eachDay, monthKey,
+  WEEKDAYS, sum, groupBy, uid,
+} from './util.js';
+
+export const ui = {
+  page: 'dashboard',
+  grain: 'month',
+  anchor: today(),
+  filter: { kind: 'all', memberId: 'all', categoryId: 'all', accountId: 'all', q: '' },
+  tables: {},
+};
+
+let rerender = () => {};
+export function bindRender(fn) { rerender = fn; }
+export function setUi(patch) { Object.assign(ui, patch); rerender(); }
+export function setFilter(patch) { Object.assign(ui.filter, patch); rerender(); }
+
+export const PAGES = [
+  { id: 'dashboard', name: '대시보드', icon: '◎' },
+  { id: 'txns', name: '내역', icon: '☰' },
+  { id: 'stats', name: '통계', icon: '◔' },
+  { id: 'assets', name: '자산', icon: '▤' },
+  { id: 'settings', name: '설정', icon: '⚙' },
+];
+
+// ── 작은 부품들 ──────────────────────────────────────────────────────────
+
+function card(opts, children) {
+  const head = el('div', { class: 'card-head' }, [
+    el('h2', { text: opts.title }),
+    opts.sub ? el('span', { class: 'sub', text: opts.sub }) : null,
+    el('span', { class: 'spacer' }),
+    ...(opts.actions || []),
+  ]);
+  return el('section', { class: `card ${opts.class || ''}` }, [opts.title ? head : null, ...[].concat(children)]);
+}
+
+function chartBox(render, height) {
+  const box = el('div', { class: 'chart-wrap', style: height ? `min-height:${height}px` : '' });
+  requestAnimationFrame(() => render(box));
+  return box;
+}
+
+/** 차트 옆에 같은 숫자를 표로도 볼 수 있게 한다 (색만으로 정보를 전달하지 않기 위해) */
+function withTable(key, chartNode, buildTable) {
+  const open = !!ui.tables[key];
+  const btn = el('button', {
+    class: 'btn sm ghost', text: open ? '표 닫기' : '표로 보기',
+    'aria-expanded': open ? 'true' : 'false',
+    onclick: () => { ui.tables[key] = !open; rerender(); },
+  });
+  return { btn, node: el('div', {}, [chartNode, open ? el('div', { class: 'tablebox' }, [buildTable()]) : null]) };
+}
+
+function dataTable(head, rows) {
+  return el('table', { class: 'data' }, [
+    el('thead', {}, [el('tr', {}, head.map((h) => el('th', { text: h })))]),
+    el('tbody', {}, rows.map((r) => el('tr', {}, r.map((c, i) => el('td', { class: i ? 'n' : '', text: c }))))),
+  ]);
+}
+
+function deltaTag(now, before, invert) {
+  if (!before) return null;
+  const diff = now - before;
+  const rate = (diff / Math.abs(before)) * 100;
+  if (Math.abs(rate) < 0.5) return el('span', { class: 'delta', text: '지난 기간과 비슷' });
+  const up = diff > 0;
+  const good = invert ? up : !up;
+  return el('span', {
+    class: `delta ${good ? 'down' : 'up'}`,
+    text: `${up ? '▲' : '▼'} ${Math.abs(rate).toFixed(0)}% (${won(Math.abs(diff))})`,
+  });
+}
+
+/** 이번 기간이 아직 진행 중이면 지난 기간도 같은 일수만큼만 잘라서 비교한다 */
+function comparePrev(grain, anchor) {
+  const cur = periodRange(grain, anchor);
+  const prev = previousRange(grain, anchor);
+  const now = today();
+  if (now < cur.from || now >= cur.to) return { ...prev, partial: false };
+  const elapsed = eachDay(cur.from, now).length;
+  return { from: prev.from, to: addDays(prev.from, elapsed - 1), partial: true };
+}
+
+function memberName(id) {
+  if (!id) return '공동';
+  const m = store.member(id);
+  return m ? `${m.emoji} ${m.name}` : '기타';
+}
+
+function catOf(t) {
+  return store.category(t.categoryId);
+}
+
+function txnIcon(t) {
+  if (t.kind === 'transfer') return '🔁';
+  return catOf(t)?.emoji || (t.kind === 'income' ? '💰' : '📦');
+}
+
+function txnTitle(t) {
+  if (t.memo) return t.memo;
+  if (t.kind === 'transfer') return '계좌 이체';
+  return catOf(t)?.name || '분류 없음';
+}
+
+function txnSub(t) {
+  const bits = [];
+  if (t.kind === 'transfer') {
+    bits.push(`${store.account(t.accountId)?.name || '?'} → ${store.account(t.toAccountId)?.name || '?'}`);
+  } else {
+    if (catOf(t)) bits.push(catOf(t).name);
+    if (store.account(t.accountId)) bits.push(store.account(t.accountId).name);
+    bits.push(memberName(t.memberId));
+  }
+  return bits.join(' · ');
+}
+
+function txnRow(t) {
+  const sign = t.kind === 'income' ? '+' : t.kind === 'expense' ? '-' : '';
+  return el('button', { class: 'txn', onclick: () => openTxnSheet(t) }, [
+    el('span', { class: 'ico', text: txnIcon(t) }),
+    el('span', { class: 'body' }, [
+      el('span', { class: 't1' }, [txnTitle(t), t.sample ? el('span', { class: 'tag', text: '예시' }) : null]),
+      el('span', { class: 't2', text: txnSub(t) }),
+    ]),
+    el('span', { class: `amt num ${t.kind === 'income' ? 'in' : t.kind === 'transfer' ? 'tr' : 'out'}`, text: `${sign}${wonPlain(t.amount)}` }),
+  ]);
+}
+
+function txnList(list, emptyText) {
+  if (!list.length) return el('p', { class: 'empty', text: emptyText || '이 기간에는 내역이 없어요.' });
+  const wrap = el('div', {});
+  for (const [date, items] of groupBy(list, (t) => t.date)) {
+    const spent = sum(items.filter((t) => t.kind === 'expense'), (t) => t.amount);
+    const got = sum(items.filter((t) => t.kind === 'income'), (t) => t.amount);
+    const d = fromYMD(date);
+    wrap.append(el('div', { class: 'daygroup' }, [
+      el('div', { class: 'dayhead' }, [
+        el('span', { class: 'd', text: `${d.getMonth() + 1}월 ${d.getDate()}일` }),
+        el('span', { class: 'w', text: `${WEEKDAYS[d.getDay()]}요일` }),
+        el('span', { class: 'spacer' }),
+        el('span', { class: 't num', text: [got ? `+${wonPlain(got)}` : null, spent ? `-${wonPlain(spent)}` : null].filter(Boolean).join('  ') }),
+      ]),
+      ...items.map(txnRow),
+    ]));
+  }
+  return wrap;
+}
+
+// 기간 안의 지출을 카테고리별로 묶어 큰 순으로. 9번째부터는 '기타'로 접는다.
+function categoryBreakdown(list, limit = 8) {
+  const byCat = new Map();
+  for (const t of list) {
+    if (t.kind !== 'expense') continue;
+    const c = catOf(t);
+    const key = c?.id || 'none';
+    if (!byCat.has(key)) byCat.set(key, { id: key, name: c?.name || '분류 없음', emoji: c?.emoji || '📦', value: 0 });
+    byCat.get(key).value += t.amount;
+  }
+  const all = [...byCat.values()].sort((a, b) => b.value - a.value);
+  const head = all.slice(0, limit - 1);
+  const tail = all.slice(limit - 1);
+  const rows = head.map((r, i) => ({ ...r, slot: i + 1 }));
+  if (tail.length) rows.push({ id: '_etc', name: `기타 ${tail.length}개 분류`, emoji: '⋯', value: sum(tail, (r) => r.value), slot: limit });
+  return { rows, all };
+}
+
+function catBars(rows, total, prevMap) {
+  if (!rows.length) return el('p', { class: 'empty', text: '지출 내역이 없어요.' });
+  const max = Math.max(...rows.map((r) => r.value), 1);
+  return el('div', {}, rows.map((r) => {
+    const prev = prevMap?.get(r.id);
+    return el('div', { class: 'catrow' }, [
+      el('span', { class: 'name' }, [
+        el('span', { class: 'swatch', style: `background:var(--s${r.slot})` }),
+        `${r.emoji} ${r.name}`,
+      ]),
+      el('span', { class: 'val num', text: wonPlain(r.value) }),
+      el('span', { class: 'track' }, [el('span', { class: 'fill', style: `width:${(r.value / max) * 100}%;background:var(--s${r.slot})` })]),
+      el('span', { class: 'meta' }, [
+        el('span', { text: `${((r.value / (total || 1)) * 100).toFixed(1)}%` }),
+        prev !== undefined ? deltaTag(r.value, prev) : null,
+      ]),
+    ]);
+  }));
+}
+
+// ── 대시보드 ─────────────────────────────────────────────────────────────
+
+function viewDashboard() {
+  const { from, to } = periodRange(ui.grain, ui.anchor);
+  const prev = comparePrev(ui.grain, ui.anchor);
+  const list = store.inRange(from, to);
+  const prevList = store.inRange(prev.from, prev.to);
+  const spent = sum(list.filter((t) => t.kind === 'expense'), (t) => t.amount);
+  const income = sum(list.filter((t) => t.kind === 'income'), (t) => t.amount);
+  const prevSpent = sum(prevList.filter((t) => t.kind === 'expense'), (t) => t.amount);
+  const nw = store.netWorth(to);
+  const days = eachDay(from, to);
+  const elapsed = Math.max(1, days.filter((d) => d <= today()).length);
+  const { rows } = categoryBreakdown(list);
+  const out = [];
+
+  if (store.hasSamples()) {
+    out.push(el('div', { class: 'banner' }, [
+      el('span', { text: '지금 보이는 숫자는 감을 잡으라고 넣어 둔 예시 내역이에요.' }),
+      el('span', { class: 'spacer' }),
+      el('button', {
+        class: 'btn sm',
+        text: '예시 지우고 시작하기',
+        onclick: async () => { await store.clearSamples(); toast('예시 내역을 지웠어요'); },
+      }),
+    ]));
+  }
+
+  out.push(card({ class: 'lift' }, [
+    el('div', { class: 'hero' }, [
+      el('div', { class: 'hero-main' }, [
+        el('span', { class: 'eyebrow', text: `${periodLabel(ui.grain, ui.anchor)} 수지` }),
+        el('span', { class: `hero-figure ${income - spent < 0 ? 'v out' : ''}`, text: won(income - spent) }),
+        el('span', { class: 'hero-note', text: `수입에서 지출을 뺀 금액 · 하루 평균 ${won(spent / elapsed)} 씀` }),
+      ]),
+      el('div', { class: 'hero-side' }, [
+        el('div', { class: 'kv' }, [el('span', { class: 'k', text: '수입' }), el('span', { class: 'v in', text: won(income) })]),
+        el('div', { class: 'kv' }, [el('span', { class: 'k', text: '지출' }), el('span', { class: 'v out', text: won(spent) })]),
+        el('div', { class: 'kv' }, [
+          el('span', { class: 'k', text: prev.partial ? '지난 기간 같은 날까지' : '지난 기간 대비' }),
+          el('span', {}, [deltaTag(spent, prevSpent) || el('span', { class: 'delta', text: '—' })]),
+        ]),
+      ]),
+    ]),
+  ]));
+
+  out.push(el('div', { class: 'tiles' }, [
+    tile('순자산', won(nw.net), '자산 − 부채'),
+    tile('총자산', won(nw.assets), '통장 · 현금 · 투자'),
+    tile('카드·대출', won(nw.debts), '아직 갚지 않은 돈'),
+    tile('건수', `${list.length}건`, `${elapsed}일 동안`),
+  ]));
+
+  const months = monthSeries(12);
+  const netPoints = months.map((m) => ({
+    key: m.key, label: `${Number(m.key.slice(5))}월`, full: `${m.key.slice(0, 4)}년 ${Number(m.key.slice(5))}월`,
+    value: store.netWorth(m.end).net,
+  }));
+  const netTable = withTable('dash-net', chartBox((b) => areaChart(b, netPoints, { height: 215, aria: '최근 12개월 순자산 추이' }), 215),
+    () => dataTable(['월', '순자산'], netPoints.map((p) => [p.full, won(p.value)])));
+
+  out.push(el('div', { class: 'split' }, [
+    card({ title: '자산 흐름', sub: '최근 12개월 순자산', actions: [netTable.btn] }, [netTable.node]),
+    card({ title: '어디에 많이 썼나', sub: periodLabel(ui.grain, ui.anchor) }, [
+      chartBox((b) => donutChart(b, rows.map((r) => ({ label: r.name, value: r.value, slot: r.slot, emoji: r.emoji })), { size: 190 }), 190),
+      el('div', { class: 'legend' }, rows.slice(0, 6).map((r) => el('span', { class: 'li' }, [
+        el('span', { class: 'sw', style: `background:var(--s${r.slot})` }),
+        `${r.name} ${((r.value / (spent || 1)) * 100).toFixed(0)}%`,
+      ]))),
+    ]),
+  ]));
+
+  out.push(budgetCard());
+  out.push(card({
+    title: '최근 내역',
+    actions: [el('button', { class: 'btn sm ghost', text: '전체 보기 →', onclick: () => setUi({ page: 'txns' }) })],
+  }, [txnList(store.txns().slice(0, 7))]));
+
+  return out;
+}
+
+function tile(k, v, d) {
+  return el('div', { class: 'tile' }, [
+    el('span', { class: 'k', text: k }),
+    el('span', { class: 'v', text: v }),
+    d ? el('span', { class: 'd', text: d }) : null,
+  ]);
+}
+
+function budgetCard() {
+  const mFrom = startOfMonth(ui.anchor);
+  const mTo = endOfMonth(ui.anchor);
+  const list = store.inRange(mFrom, mTo).filter((t) => t.kind === 'expense');
+  const byCat = new Map();
+  for (const t of list) byCat.set(t.categoryId, (byCat.get(t.categoryId) || 0) + t.amount);
+  const cats = store.config.categories
+    .filter((c) => c.kind === 'expense' && c.budget)
+    .map((c) => ({ ...c, used: byCat.get(c.id) || 0 }))
+    .sort((a, b) => b.used / b.budget - a.used / a.budget)
+    .slice(0, 6);
+  const totalBudget = sum(store.config.categories.filter((c) => c.kind === 'expense' && c.budget), (c) => c.budget);
+  const totalUsed = sum(list, (t) => t.amount);
+
+  return card({
+    title: '이번 달 예산',
+    sub: `${Number(mFrom.slice(5, 7))}월 · ${won(totalUsed)} / ${won(totalBudget)}`,
+    actions: [el('button', { class: 'btn sm ghost', text: '예산 고치기', onclick: () => setUi({ page: 'settings' }) })],
+  }, cats.length ? cats.map((c) => {
+    const ratio = c.used / c.budget;
+    const state = ratio >= 1 ? 'crit' : ratio >= 0.8 ? 'warn' : 'good';
+    const mark = { good: '○', warn: '△', crit: '●' }[state];
+    const word = { good: '여유', warn: '빠듯', crit: '초과' }[state];
+    return el('div', { class: 'catrow' }, [
+      el('span', { class: 'name', text: `${c.emoji} ${c.name}` }),
+      el('span', { class: 'val num', text: `${wonShort(c.used)} / ${wonShort(c.budget)}` }),
+      el('span', { class: 'track' }, [el('span', { class: 'fill', style: `width:${Math.min(100, ratio * 100)}%;background:var(--${state})` })]),
+      el('span', { class: 'meta' }, [
+        el('span', { style: `color:var(--${state});font-weight:600`, text: `${mark} ${word} · ${(ratio * 100).toFixed(0)}%` }),
+        el('span', { text: ratio >= 1 ? `${won(c.used - c.budget)} 넘김` : `${won(c.budget - c.used)} 남음` }),
+      ]),
+    ]);
+  }) : [el('p', { class: 'empty', text: '설정에서 분류별 예산을 정하면 여기에 진행 상황이 보여요.' })]);
+}
+
+// ── 내역 ─────────────────────────────────────────────────────────────────
+
+function filtered(list) {
+  const f = ui.filter;
+  const q = f.q.trim().toLowerCase();
+  return list.filter((t) => {
+    if (f.kind !== 'all' && t.kind !== f.kind) return false;
+    if (f.memberId !== 'all' && (f.memberId === 'shared' ? t.memberId : t.memberId !== f.memberId)) return false;
+    if (f.categoryId !== 'all' && t.categoryId !== f.categoryId) return false;
+    if (f.accountId !== 'all' && t.accountId !== f.accountId && t.toAccountId !== f.accountId) return false;
+    if (q && !`${txnTitle(t)} ${txnSub(t)}`.toLowerCase().includes(q)) return false;
+    return true;
+  });
+}
+
+function viewTxns() {
+  const { from, to } = periodRange(ui.grain, ui.anchor);
+  const prev = comparePrev(ui.grain, ui.anchor);
+  const list = filtered(store.inRange(from, to));
+  const prevSpent = sum(filtered(store.inRange(prev.from, prev.to)).filter((t) => t.kind === 'expense'), (t) => t.amount);
+  const spent = sum(list.filter((t) => t.kind === 'expense'), (t) => t.amount);
+  const income = sum(list.filter((t) => t.kind === 'income'), (t) => t.amount);
+  const f = ui.filter;
+
+  // 일 단위로 볼 때도 그 날이 한 달 중 어디쯤인지 보이도록 달 전체를 그린다
+  const barFrom = ui.grain === 'day' ? startOfMonth(ui.anchor) : from;
+  const barTo = ui.grain === 'day' ? endOfMonth(ui.anchor) : to;
+  const dayMap = new Map();
+  for (const t of filtered(store.inRange(barFrom, barTo))) {
+    if (t.kind !== 'expense') continue;
+    dayMap.set(t.date, (dayMap.get(t.date) || 0) + t.amount);
+  }
+  const points = eachDay(barFrom, barTo).map((d) => ({
+    key: d, label: ui.grain === 'week' ? WEEKDAYS[fromYMD(d).getDay()] : String(fromYMD(d).getDate()),
+    full: prettyDate(d), value: dayMap.get(d) || 0,
+  }));
+
+  const out = [];
+  out.push(card({ class: 'lift' }, [
+    el('div', { class: 'hero' }, [
+      el('div', { class: 'hero-main' }, [
+        el('span', { class: 'eyebrow', text: `${periodLabel(ui.grain, ui.anchor)} 지출` }),
+        el('span', { class: 'hero-figure', text: won(spent) }),
+        el('span', { class: 'hero-note' }, [
+          deltaTag(spent, prevSpent) || el('span', { text: '지난 기간과 비교할 내역이 없어요' }),
+          el('span', { text: prev.partial ? ' · 지난 기간 같은 날까지와 비교' : ' · 지난 기간 전체와 비교' }),
+        ]),
+      ]),
+      el('div', { class: 'hero-side' }, [
+        el('div', { class: 'kv' }, [el('span', { class: 'k', text: '수입' }), el('span', { class: 'v in', text: won(income) })]),
+        el('div', { class: 'kv' }, [el('span', { class: 'k', text: '합계' }), el('span', { class: 'v', text: won(income - spent) })]),
+        el('div', { class: 'kv' }, [el('span', { class: 'k', text: '건수' }), el('span', { class: 'v', text: `${list.length}` })]),
+      ]),
+    ]),
+    chartBox((b) => barChart(b, points, {
+      height: 140, highlightKey: ui.grain === 'day' ? ui.anchor : null,
+      onPick: (key) => setUi({ grain: 'day', anchor: key }),
+      aria: '일자별 지출 막대 그래프',
+    }), 140),
+  ]));
+
+  const cats = store.config.categories.filter((c) => (f.kind === 'income' ? c.kind === 'income' : c.kind === 'expense'));
+  out.push(card({ title: '골라 보기' }, [
+    el('div', { class: 'chips', style: 'margin-bottom:8px' }, [
+      chip('전체', f.kind === 'all', () => setFilter({ kind: 'all' })),
+      chip('지출', f.kind === 'expense', () => setFilter({ kind: 'expense' })),
+      chip('수입', f.kind === 'income', () => setFilter({ kind: 'income' })),
+      chip('이체', f.kind === 'transfer', () => setFilter({ kind: 'transfer' })),
+    ]),
+    el('div', { class: 'chips', style: 'margin-bottom:8px' }, [
+      chip('누구나', f.memberId === 'all', () => setFilter({ memberId: 'all' })),
+      chip('🏠 공동', f.memberId === 'shared', () => setFilter({ memberId: 'shared' })),
+      ...store.config.members.map((m) => chip(`${m.emoji} ${m.name}`, f.memberId === m.id, () => setFilter({ memberId: m.id }))),
+    ]),
+    el('div', { class: 'row2' }, [
+      el('select', {
+        'aria-label': '분류로 거르기', id: 'filter-cat',
+        onchange: (e) => setFilter({ categoryId: e.target.value }),
+      }, [
+        el('option', { value: 'all', text: '모든 분류', selected: f.categoryId === 'all' }),
+        ...cats.map((c) => el('option', { value: c.id, text: `${c.emoji} ${c.name}`, selected: f.categoryId === c.id })),
+      ]),
+      el('select', {
+        'aria-label': '결제수단으로 거르기', id: 'filter-acct',
+        onchange: (e) => setFilter({ accountId: e.target.value }),
+      }, [
+        el('option', { value: 'all', text: '모든 결제수단', selected: f.accountId === 'all' }),
+        ...store.config.accounts.map((a) => el('option', { value: a.id, text: a.name, selected: f.accountId === a.id })),
+      ]),
+    ]),
+    el('div', { class: 'field', style: 'margin:10px 0 0' }, [
+      el('input', {
+        type: 'search', id: 'filter-q', placeholder: '메모·분류 검색 (예: 사료, 축의금)', value: f.q,
+        oninput: (e) => { ui.filter.q = e.target.value; scheduleSearch(); },
+      }),
+    ]),
+  ]));
+
+  out.push(card({ title: `${periodLabel(ui.grain, ui.anchor)} 내역`, sub: `${list.length}건` }, [txnList(list)]));
+  return out;
+}
+
+let searchTimer;
+function scheduleSearch() {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    rerender();
+    const inp = document.getElementById('filter-q');
+    if (inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+  }, 260);
+}
+
+function chip(text, on, onclick) {
+  return el('button', { class: 'chip', 'aria-pressed': on ? 'true' : 'false', text, onclick });
+}
+
+// ── 통계 ─────────────────────────────────────────────────────────────────
+
+/** 최근 n개월. 기록이 시작되기 전의 밋밋한 구간은 그리지 않는다. */
+function monthSeries(n) {
+  const all = store.txns();
+  const oldest = all.length ? all[all.length - 1].date : null;
+  const startKey = oldest ? monthKey(addMonths(startOfMonth(oldest), -1)) : null;
+  const months = [];
+  for (let i = n - 1; i >= 0; i -= 1) {
+    const anchor = startOfMonth(addMonths(ui.anchor, -i));
+    months.push({ key: monthKey(anchor), start: anchor, end: endOfMonth(anchor) });
+  }
+  const kept = startKey ? months.filter((m) => m.key >= startKey) : months;
+  return kept.length >= 2 ? kept : months.slice(-Math.min(3, months.length));
+}
+
+function viewStats() {
+  const { from, to } = periodRange(ui.grain, ui.anchor);
+  const prev = comparePrev(ui.grain, ui.anchor);
+  const list = store.inRange(from, to);
+  const spent = sum(list.filter((t) => t.kind === 'expense'), (t) => t.amount);
+  const { rows, all } = categoryBreakdown(list, 9);
+  const prevBreak = categoryBreakdown(store.inRange(prev.from, prev.to), 99);
+  const prevMap = new Map(prevBreak.all.map((r) => [r.id, r.value]));
+
+  const catTable = withTable('stats-cat', catBars(rows, spent, prevMap),
+    () => dataTable(['분류', '금액', '비중'], all.map((r) => [`${r.emoji} ${r.name}`, won(r.value), `${((r.value / (spent || 1)) * 100).toFixed(1)}%`])));
+
+  // 사람별 — 강아지 몫이 얼마인지 바로 보이게
+  const people = [{ id: 'shared', name: '공동', emoji: '🏠' }, ...store.config.members];
+  const byMember = people.map((p, i) => ({
+    ...p, slot: i + 1,
+    value: sum(list.filter((t) => t.kind === 'expense' && (p.id === 'shared' ? !t.memberId : t.memberId === p.id)), (t) => t.amount),
+  })).filter((p) => p.value > 0);
+
+  const byAccount = store.config.accounts.map((a, i) => ({
+    id: a.id, name: a.name, emoji: ACCOUNT_TYPES[a.type]?.emoji || '💳', slot: (i % 8) + 1,
+    value: sum(list.filter((t) => t.kind === 'expense' && t.accountId === a.id), (t) => t.amount),
+  })).filter((a) => a.value > 0).sort((a, b) => b.value - a.value);
+
+  const months = monthSeries(12);
+  const groups = months.map((m) => {
+    const ml = store.inRange(m.start, m.end);
+    return {
+      label: `${Number(m.key.slice(5))}`, full: `${m.key.slice(0, 4)}년 ${Number(m.key.slice(5))}월`,
+      values: [
+        sum(ml.filter((t) => t.kind === 'income'), (t) => t.amount),
+        sum(ml.filter((t) => t.kind === 'expense'), (t) => t.amount),
+      ],
+    };
+  });
+
+  return [
+    card({ title: '분류별 지출', sub: `${periodLabel(ui.grain, ui.anchor)} · 총 ${won(spent)}`, actions: [catTable.btn] }, [catTable.node]),
+    el('div', { class: 'split' }, [
+      card({ title: '누구에게 쓴 돈인가', sub: '공동 지출과 개인 지출' }, [
+        chartBox((b) => donutChart(b, byMember.map((p) => ({ label: p.name, value: p.value, slot: p.slot, emoji: p.emoji })), { size: 180, centerLabel: '기간 지출' }), 180),
+        el('div', { class: 'legend' }, byMember.map((p) => el('span', { class: 'li' }, [
+          el('span', { class: 'sw', style: `background:var(--s${p.slot})` }),
+          `${p.emoji} ${p.name} ${won(p.value)}`,
+        ]))),
+      ]),
+      card({ title: '결제수단별', sub: '무엇으로 결제했나' }, [
+        byAccount.length ? catBars(byAccount, spent) : el('p', { class: 'empty', text: '지출 내역이 없어요.' }),
+      ]),
+    ]),
+    card({ title: '월별 수입과 지출', sub: '최근 12개월' }, [
+      el('div', { class: 'legend', style: 'margin:0 0 6px' }, [
+        el('span', { class: 'li' }, [el('span', { class: 'sw', style: 'background:var(--in)' }), '수입']),
+        el('span', { class: 'li' }, [el('span', { class: 'sw', style: 'background:var(--out)' }), '지출']),
+      ]),
+      chartBox((b) => groupedBarChart(b, groups, { series: ['수입', '지출'], height: 190 }), 190),
+    ]),
+  ];
+}
+
+// ── 자산 ─────────────────────────────────────────────────────────────────
+
+function viewAssets() {
+  const nw = store.netWorth();
+  const months = monthSeries(12);
+  const points = months.map((m) => ({
+    key: m.key, label: `${Number(m.key.slice(5))}월`, full: `${m.key.slice(0, 4)}년 ${Number(m.key.slice(5))}월`,
+    value: store.netWorth(m.end).net,
+  }));
+  const first = points[0]?.value || 0;
+  const grown = nw.net - first;
+  const t = withTable('assets-net', chartBox((b) => areaChart(b, points, { height: 235, aria: '최근 12개월 순자산 추이' }), 235),
+    () => dataTable(['월', '순자산', '전월 대비'], points.map((p, i) => [p.full, won(p.value), i ? won(p.value - points[i - 1].value) : '—'])));
+
+  const groupsOrder = ['bank', 'cash', 'savings', 'invest', 'card', 'loan'];
+  const byType = groupsOrder
+    .map((type) => ({ type, items: store.config.accounts.filter((a) => a.type === type) }))
+    .filter((g) => g.items.length);
+
+  const assetAccounts = store.config.accounts
+    .filter((a) => !ACCOUNT_TYPES[a.type]?.liability)
+    .map((a, i) => ({ id: a.id, name: a.name, emoji: ACCOUNT_TYPES[a.type].emoji, slot: (i % 8) + 1, value: Math.max(0, nw.bal[a.id] || 0) }))
+    .filter((a) => a.value > 0)
+    .sort((a, b) => b.value - a.value);
+
+  return [
+    card({ class: 'lift' }, [
+      el('div', { class: 'hero' }, [
+        el('div', { class: 'hero-main' }, [
+          el('span', { class: 'eyebrow', text: '우리집 순자산' }),
+          el('span', { class: 'hero-figure', text: won(nw.net) }),
+          el('span', { class: 'hero-note', text: `1년 전 대비 ${grown >= 0 ? '+' : ''}${won(grown)}` }),
+        ]),
+        el('div', { class: 'hero-side' }, [
+          el('div', { class: 'kv' }, [el('span', { class: 'k', text: '자산' }), el('span', { class: 'v', text: won(nw.assets) })]),
+          el('div', { class: 'kv' }, [el('span', { class: 'k', text: '부채' }), el('span', { class: 'v out', text: won(nw.debts) })]),
+        ]),
+      ]),
+    ]),
+    card({ title: '자산 흐름', sub: '매월 말 순자산', actions: [t.btn] }, [t.node]),
+    el('div', { class: 'split' }, [
+      card({ title: '계좌별 잔액', actions: [el('button', { class: 'btn sm ghost', text: '계좌 관리', onclick: () => setUi({ page: 'settings' }) })] },
+        byType.map((g) => el('div', {}, [
+          el('div', { class: 'eyebrow', style: 'margin:12px 0 2px', text: ACCOUNT_TYPES[g.type].label }),
+          ...g.items.map((a) => {
+            const v = nw.bal[a.id] || 0;
+            return el('div', { class: 'acct' }, [
+              el('span', { class: 'ico', text: ACCOUNT_TYPES[a.type].emoji }),
+              el('span', { class: 'body' }, [
+                el('span', { class: 'n', text: a.name }),
+                el('span', { class: 't', text: ACCOUNT_TYPES[a.type].label }),
+              ]),
+              el('span', { class: `b num ${v < 0 ? 'neg' : ''}`, text: won(v) }),
+            ]);
+          }),
+        ]))),
+      card({ title: '자산 구성', sub: '어디에 얼마나 들어있나' }, [
+        assetAccounts.length ? catBars(assetAccounts, nw.assets) : el('p', { class: 'empty', text: '계좌를 등록하면 구성이 보여요.' }),
+      ]),
+    ]),
+  ];
+}
+
+// ── 설정 ─────────────────────────────────────────────────────────────────
+
+function viewSettings() {
+  const cfg = store.config;
+  const out = [];
+
+  out.push(card({ title: '우리집' }, [
+    el('div', { class: 'field' }, [
+      el('label', { for: 'set-house', text: '가계부 이름' }),
+      el('input', {
+        id: 'set-house', type: 'text', value: cfg.settings.household,
+        onchange: (e) => store.saveConfig({ settings: { ...cfg.settings, household: e.target.value.trim() || '우리집 가계부' } }),
+      }),
+    ]),
+    el('div', { class: 'field' }, [
+      el('label', { text: '화면 테마' }),
+      el('div', { class: 'picker' }, ['system', 'light', 'dark'].map((v) => el('button', {
+        'aria-pressed': (localStorage.getItem('hab.theme') || 'system') === v ? 'true' : 'false',
+        text: { system: '기기 설정', light: '밝게', dark: '어둡게' }[v],
+        onclick: () => { applyTheme(v); rerender(); },
+      }))),
+    ]),
+  ]));
+
+  out.push(card({
+    title: '함께 쓰는 사람',
+    sub: '지출을 누구 몫으로 남길지 고를 때 쓰여요',
+    actions: [el('button', {
+      class: 'btn sm', text: '+ 추가',
+      onclick: () => store.saveConfig({ members: [...cfg.members, { id: uid('m_'), name: '새 구성원', emoji: '🙂' }] }),
+    })],
+  }, cfg.members.map((m, i) => el('div', { class: 'listline' }, [
+    el('input', {
+      type: 'text', value: m.emoji, style: 'width:52px;text-align:center', 'aria-label': `${m.name} 이모지`,
+      onchange: (e) => patchList('members', i, { emoji: e.target.value.trim() || '🙂' }),
+    }),
+    el('input', {
+      type: 'text', value: m.name, 'aria-label': '이름',
+      onchange: (e) => patchList('members', i, { name: e.target.value.trim() || '이름 없음' }),
+    }),
+    el('span', { class: 'spacer' }),
+    el('button', {
+      class: 'btn sm danger', text: '삭제',
+      onclick: () => confirmThen(`'${m.name}' 을(를) 목록에서 지울까요? 이미 기록한 내역은 공동 지출로 남아요.`,
+        () => store.saveConfig({ members: cfg.members.filter((x) => x.id !== m.id) })),
+    }),
+  ]))));
+
+  out.push(card({
+    title: '분류와 예산',
+    sub: '월 예산을 비워 두면 예산 관리에서 빠져요',
+    actions: [el('button', {
+      class: 'btn sm', text: '+ 지출 분류',
+      onclick: () => store.saveConfig({ categories: [...cfg.categories, { id: uid('c_'), name: '새 분류', emoji: '🏷️', kind: 'expense', budget: null }] }),
+    })],
+  }, cfg.categories.map((c, i) => el('div', { class: 'listline' }, [
+    el('input', {
+      type: 'text', value: c.emoji, style: 'width:52px;text-align:center', 'aria-label': `${c.name} 이모지`,
+      onchange: (e) => patchList('categories', i, { emoji: e.target.value.trim() || '🏷️' }),
+    }),
+    el('input', {
+      type: 'text', value: c.name, 'aria-label': '분류 이름',
+      onchange: (e) => patchList('categories', i, { name: e.target.value.trim() || '이름 없음' }),
+    }),
+    el('span', { class: 'spacer' }),
+    c.kind === 'expense' ? el('input', {
+      type: 'number', value: c.budget ?? '', placeholder: '월 예산', style: 'width:118px', 'aria-label': `${c.name} 월 예산`,
+      onchange: (e) => patchList('categories', i, { budget: e.target.value === '' ? null : Math.max(0, Number(e.target.value)) }),
+    }) : el('span', { class: 'tag', text: '수입' }),
+    el('button', {
+      class: 'btn sm danger', text: '삭제',
+      onclick: () => confirmThen(`'${c.name}' 분류를 지울까요? 이 분류로 적어둔 내역은 '분류 없음'이 돼요.`,
+        () => store.saveConfig({ categories: cfg.categories.filter((x) => x.id !== c.id) })),
+    }),
+  ]))));
+
+  out.push(card({
+    title: '계좌와 결제수단',
+    sub: '처음 잔액을 넣어 두면 순자산이 정확해져요',
+    actions: [el('button', {
+      class: 'btn sm', text: '+ 계좌',
+      onclick: () => store.saveConfig({ accounts: [...cfg.accounts, { id: uid('a_'), name: '새 계좌', type: 'bank', opening: 0 }] }),
+    })],
+  }, cfg.accounts.map((a, i) => el('div', { class: 'listline' }, [
+    el('input', {
+      type: 'text', value: a.name, 'aria-label': '계좌 이름',
+      onchange: (e) => patchList('accounts', i, { name: e.target.value.trim() || '이름 없음' }),
+    }),
+    el('select', {
+      'aria-label': '계좌 종류', onchange: (e) => patchList('accounts', i, { type: e.target.value }),
+    }, Object.entries(ACCOUNT_TYPES).map(([k, v]) => el('option', { value: k, text: `${v.emoji} ${v.label}`, selected: a.type === k }))),
+    el('span', { class: 'spacer' }),
+    el('input', {
+      type: 'number', value: a.opening ?? 0, style: 'width:128px', 'aria-label': `${a.name} 시작 잔액`,
+      onchange: (e) => patchList('accounts', i, { opening: Math.round(Number(e.target.value) || 0) }),
+    }),
+    el('button', {
+      class: 'btn sm danger', text: '삭제',
+      onclick: () => confirmThen(`'${a.name}' 계좌를 지울까요?`,
+        () => store.saveConfig({ accounts: cfg.accounts.filter((x) => x.id !== a.id) })),
+    }),
+  ]))));
+
+  const json = JSON.stringify(store.exportData(), null, 0);
+  out.push(card({ title: '데이터', sub: store.status === 'cloud' ? '이 장부는 클라우드에 저장돼 PC와 폰이 같은 내용을 봅니다' : '이 장부는 이 브라우저에 저장됩니다' }, [
+    el('p', { class: 'hint', style: 'font-size:12.5px;color:var(--ink-3);margin:0 0 12px' , text: `거래 ${store.txns().length}건 · 분류 ${cfg.categories.length}개 · 계좌 ${cfg.accounts.length}개` }),
+    el('div', { class: 'quick' }, [
+      el('button', {
+        class: 'btn', text: '백업 복사',
+        onclick: async () => {
+          try { await navigator.clipboard.writeText(json); toast('백업 JSON을 클립보드에 복사했어요'); }
+          catch { toast('복사에 실패했어요. 아래 상자에서 직접 선택해 주세요'); showBackupBox(json); }
+        },
+      }),
+      el('button', { class: 'btn', text: '파일로 내려받기', onclick: () => downloadBackup(json) }),
+      el('button', { class: 'btn', text: '백업 불러오기', onclick: openImportSheet }),
+      store.hasSamples() ? el('button', { class: 'btn', text: '예시 내역 지우기', onclick: async () => { await store.clearSamples(); toast('예시 내역을 지웠어요'); } }) : null,
+      !store.hasSamples() ? el('button', {
+        class: 'btn', text: '예시 내역 다시 넣기',
+        onclick: () => confirmThen('예시 내역을 다시 채워 넣을까요? 지금 기록은 그대로 남습니다.', async () => {
+          const sample = buildSampleData();
+          for (const items of Object.values(sample.months)) {
+            for (const t of Object.values(items)) {
+              const key = monthKey(t.date);
+              (store.months[key] ||= {})[t.id] = t;
+              await store.writeMonth(key, { [t.id]: t });
+            }
+          }
+          store.emit();
+          toast('예시 내역을 넣었어요');
+        }),
+      }) : null,
+      el('button', {
+        class: 'btn danger', text: '전부 지우고 새로 시작',
+        onclick: () => confirmThen('모든 내역과 설정을 지웁니다. 되돌릴 수 없어요. 계속할까요?', async () => {
+          await store.resetAll();
+          toast('처음 상태로 되돌렸어요');
+        }),
+      }),
+    ]),
+    el('div', { id: 'backup-box' }),
+  ]));
+
+  return out;
+}
+
+function patchList(key, index, patch) {
+  const next = store.config[key].map((item, i) => (i === index ? { ...item, ...patch } : item));
+  store.saveConfig({ [key]: next });
+}
+
+function showBackupBox(json) {
+  const box = document.getElementById('backup-box');
+  if (!box) return;
+  box.replaceChildren(el('textarea', { rows: 6, style: 'width:100%;margin-top:12px;font-family:var(--font-mono);font-size:11px', readonly: true }, [json]));
+  box.querySelector('textarea').select();
+}
+
+function downloadBackup(json) {
+  try {
+    const blob = new Blob([json], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `가계부-백업-${today()}.json`;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    toast('백업 파일을 내려받았어요');
+  } catch {
+    showBackupBox(json);
+    toast('내려받기가 막혀 있어요. 아래 내용을 복사해 두세요');
+  }
+}
+
+function openImportSheet() {
+  const ta = el('textarea', { rows: 7, placeholder: '백업 JSON을 붙여넣으세요', style: 'width:100%;font-family:var(--font-mono);font-size:11px' });
+  const file = el('input', { type: 'file', accept: 'application/json,.json', onchange: async (e) => {
+    const f = e.target.files?.[0];
+    if (f) ta.value = await f.text();
+  } });
+  openSheet('백업 불러오기', [
+    el('p', { style: 'font-size:13px;color:var(--ink-2);margin:0 0 12px', text: '지금 장부를 백업 내용으로 통째로 바꿉니다.' }),
+    el('div', { class: 'field' }, [el('label', { text: '파일 선택' }), file]),
+    el('div', { class: 'field' }, [el('label', { text: '또는 붙여넣기' }), ta]),
+  ], [
+    el('button', {
+      class: 'btn primary', text: '불러오기',
+      onclick: async () => {
+        try {
+          await store.replaceAll(JSON.parse(ta.value));
+          closeSheet();
+          toast('백업을 불러왔어요');
+        } catch (err) {
+          toast(err.message || '읽을 수 없는 파일이에요');
+        }
+      },
+    }),
+  ]);
+}
+
+export function applyTheme(mode) {
+  try { localStorage.setItem('hab.theme', mode); } catch { /* 저장 못 해도 이번 화면에는 적용된다 */ }
+  const root = document.documentElement;
+  if (mode === 'system') root.removeAttribute('data-theme');
+  else root.setAttribute('data-theme', mode);
+}
+
+// ── 거래 입력 시트 ───────────────────────────────────────────────────────
+
+export function openSheet(title, body, actions, extra) {
+  closeSheet();
+  const scrim = el('div', { class: 'scrim', id: 'scrim', onclick: (e) => { if (e.target === scrim) closeSheet(); } }, [
+    el('div', { class: 'sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': title }, [
+      el('div', { class: 'sheet-head' }, [
+        el('h2', { text: title }),
+        el('span', { class: 'spacer' }),
+        el('button', { class: 'iconbtn', 'aria-label': '닫기', text: '✕', onclick: closeSheet }),
+      ]),
+      ...[].concat(body),
+      el('div', { class: 'sheet-actions' }, [
+        ...(extra || []),
+        el('span', { class: 'spacer' }),
+        el('button', { class: 'btn', text: '취소', onclick: closeSheet }),
+        ...actions,
+      ]),
+    ]),
+  ]);
+  document.body.append(scrim);
+  document.addEventListener('keydown', escClose);
+}
+
+function escClose(e) { if (e.key === 'Escape') closeSheet(); }
+
+export function closeSheet() {
+  document.getElementById('scrim')?.remove();
+  document.removeEventListener('keydown', escClose);
+}
+
+function confirmThen(message, fn) {
+  openSheet('잠깐 확인할게요', [el('p', { style: 'font-size:14px;line-height:1.6;margin:0', text: message })], [
+    el('button', { class: 'btn primary', text: '네, 진행할게요', onclick: async () => { closeSheet(); await fn(); rerender(); } }),
+  ]);
+}
+
+export function openTxnSheet(existing) {
+  const draft = existing ? { ...existing } : {
+    kind: 'expense', date: ui.grain === 'day' ? ui.anchor : today(), amount: '',
+    categoryId: store.config.categories.find((c) => c.kind === 'expense')?.id || null,
+    accountId: store.config.accounts[0]?.id || null,
+    toAccountId: store.config.accounts[1]?.id || null,
+    memberId: null, memo: '',
+  };
+  const body = el('div', {});
+
+  const draw = () => {
+    const cats = store.config.categories.filter((c) => c.kind === draft.kind);
+    if (draft.kind !== 'transfer' && !cats.some((c) => c.id === draft.categoryId)) draft.categoryId = cats[0]?.id || null;
+    body.replaceChildren(
+      el('div', { class: 'picker', style: 'margin-bottom:14px' }, [
+        ['expense', '지출'], ['income', '수입'], ['transfer', '이체'],
+      ].map(([k, n]) => el('button', {
+        'aria-pressed': draft.kind === k ? 'true' : 'false', text: n,
+        onclick: () => { draft.kind = k; draw(); },
+      }))),
+      el('div', { class: 'field amount' }, [
+        el('label', { for: 'tx-amount', text: '금액 (원)' }),
+        el('input', {
+          id: 'tx-amount', type: 'text', inputmode: 'numeric', placeholder: '0',
+          value: draft.amount === '' ? '' : wonPlain(draft.amount),
+          oninput: (e) => {
+            const digits = e.target.value.replace(/[^\d]/g, '').slice(0, 12);
+            draft.amount = digits === '' ? '' : Number(digits);
+            e.target.value = digits === '' ? '' : wonPlain(Number(digits));
+          },
+        }),
+      ]),
+      el('div', { class: 'quick', style: 'margin:-6px 0 14px' }, [1000, 5000, 10000, 50000, 100000].map((v) => el('button', {
+        class: 'btn sm', text: `+${wonShort(v)}`,
+        onclick: () => { draft.amount = (Number(draft.amount) || 0) + v; draw(); },
+      })).concat([el('button', { class: 'btn sm ghost', text: '지우기', onclick: () => { draft.amount = ''; draw(); } })])),
+      el('div', { class: 'row2' }, [
+        el('div', { class: 'field' }, [
+          el('label', { for: 'tx-date', text: '날짜' }),
+          el('input', { id: 'tx-date', type: 'date', value: draft.date, onchange: (e) => { draft.date = e.target.value || today(); } }),
+        ]),
+        el('div', { class: 'field' }, [
+          el('label', { for: 'tx-acct', text: draft.kind === 'transfer' ? '보내는 계좌' : '결제수단' }),
+          el('select', { id: 'tx-acct', onchange: (e) => { draft.accountId = e.target.value; } },
+            store.config.accounts.map((a) => el('option', { value: a.id, text: `${ACCOUNT_TYPES[a.type].emoji} ${a.name}`, selected: draft.accountId === a.id }))),
+        ]),
+      ]),
+      draft.kind === 'transfer'
+        ? el('div', { class: 'field' }, [
+          el('label', { for: 'tx-to', text: '받는 계좌' }),
+          el('select', { id: 'tx-to', onchange: (e) => { draft.toAccountId = e.target.value; } },
+            store.config.accounts.map((a) => el('option', { value: a.id, text: `${ACCOUNT_TYPES[a.type].emoji} ${a.name}`, selected: draft.toAccountId === a.id }))),
+        ])
+        : el('div', { class: 'field' }, [
+          el('label', { text: '분류' }),
+          el('div', { class: 'picker' }, cats.map((c) => el('button', {
+            'aria-pressed': draft.categoryId === c.id ? 'true' : 'false', text: `${c.emoji} ${c.name}`,
+            onclick: () => { draft.categoryId = c.id; draw(); },
+          }))),
+        ]),
+      draft.kind === 'transfer' ? null : el('div', { class: 'field' }, [
+        el('label', { text: '누구 몫' }),
+        el('div', { class: 'picker' }, [
+          el('button', { 'aria-pressed': !draft.memberId ? 'true' : 'false', text: '🏠 공동', onclick: () => { draft.memberId = null; draw(); } }),
+          ...store.config.members.map((m) => el('button', {
+            'aria-pressed': draft.memberId === m.id ? 'true' : 'false', text: `${m.emoji} ${m.name}`,
+            onclick: () => { draft.memberId = m.id; draw(); },
+          })),
+        ]),
+      ]),
+      el('div', { class: 'field' }, [
+        el('label', { for: 'tx-memo', text: '메모' }),
+        el('input', { id: 'tx-memo', type: 'text', value: draft.memo || '', placeholder: '예: 봄이 사료, 장보기', onchange: (e) => { draft.memo = e.target.value; }, oninput: (e) => { draft.memo = e.target.value; } }),
+      ]),
+    );
+  };
+  draw();
+
+  const save = async () => {
+    if (!draft.amount || Number(draft.amount) <= 0) { toast('금액을 입력해 주세요'); return; }
+    if (draft.kind === 'transfer' && draft.accountId === draft.toAccountId) { toast('보내는 계좌와 받는 계좌가 같아요'); return; }
+    await store.saveTxn(draft);
+    closeSheet();
+    toast(existing ? '내역을 고쳤어요' : '내역을 적었어요');
+  };
+
+  openSheet(existing ? '내역 고치기' : '내역 적기', [body], [
+    el('button', { class: 'btn primary', text: '저장', onclick: save }),
+  ], existing ? [el('button', {
+    class: 'btn danger', text: '삭제',
+    onclick: async () => { await store.deleteTxn(existing.id); closeSheet(); toast('내역을 지웠어요'); },
+  })] : []);
+
+  setTimeout(() => document.getElementById('tx-amount')?.focus(), 30);
+}
+
+// ── 토스트 ───────────────────────────────────────────────────────────────
+
+let toastTimer;
+export function toast(message) {
+  document.getElementById('toast')?.remove();
+  const node = el('div', { class: 'toast', id: 'toast', role: 'status', text: message });
+  document.body.append(node);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => node.remove(), 2600);
+}
+
+// ── 화면 선택 ────────────────────────────────────────────────────────────
+
+export function renderPage() {
+  switch (ui.page) {
+    case 'txns': return viewTxns();
+    case 'stats': return viewStats();
+    case 'assets': return viewAssets();
+    case 'settings': return viewSettings();
+    default: return viewDashboard();
+  }
+}
+
+export { periodRange, periodLabel, shiftPeriod };
