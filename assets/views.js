@@ -1407,7 +1407,7 @@ function openRecurringSheet(existing) {
     toast(made ? `저장했어요 · ${made}건을 적었어요` : '저장했어요');
   };
 
-  openSheet(existing ? '고정 내역 고치기' : '고정 내역 만들기', [body], [
+  openSheet(existing ? '반복 내역 고치기' : '매달 반복되는 내역 만들기', [body], [
     el('button', { class: 'btn primary', text: '저장', onclick: save }),
   ], existing ? [el('button', {
     class: 'btn danger', text: '삭제',
@@ -1456,8 +1456,8 @@ function viewSettings() {
 
   const rec = store.config.recurring || [];
   out.push(card({
-    title: '고정지출 자동 등록',
-    sub: '매달 정해진 날이 되면 알아서 적혀요 · 급여나 자동이체도 넣을 수 있어요',
+    title: '매달 자동으로 적기',
+    sub: '월세·통신비 같은 고정지출은 물론, 급여와 통장 사이 이체도 됩니다 · 정해진 날이 지나면 알아서 적혀요',
     actions: [el('button', { class: 'btn sm', text: '+ 추가', onclick: () => openRecurringSheet(null) })],
   }, rec.length ? [sortableList('recurring', rec, (r) => el('div', { class: 'listline' }, [
     el('button', {
@@ -1471,11 +1471,15 @@ function viewSettings() {
       class: 'btn sm ghost', style: 'flex:1;justify-content:flex-start;text-align:left',
       text: `${r.name || '이름 없음'}`, onclick: () => openRecurringSheet(r),
     }),
+    el('span', { class: 'tag', text: { expense: '지출', income: '수입', transfer: '이체' }[r.kind] || '지출' }),
     el('span', { class: 'tag', text: `매월 ${r.day}일` }),
+    r.kind === 'transfer'
+      ? el('span', { class: 'tag', text: `${store.account(r.accountId)?.name || '?'} → ${store.account(r.toAccountId)?.name || '?'}` })
+      : null,
     el('span', { class: 'spacer' }),
     el('span', { class: 'num', style: `font-weight:600;color:var(--${r.kind === 'income' ? 'in' : r.kind === 'transfer' ? 'ink-3' : 'out'})`, text: won(r.amount) }),
     el('button', { class: 'btn sm', text: '고치기', onclick: () => openRecurringSheet(r) }),
-  ]))] : [el('p', { class: 'empty', text: '월세·통신비·보험료처럼 매달 같은 날 나가는 것을 넣어 두면 직접 적지 않아도 돼요.' })]));
+  ]))] : [el('p', { class: 'empty', text: '월세·통신비처럼 매달 나가는 돈, 급여처럼 매달 들어오는 돈, 급여일에 생활비·강아지 통장으로 보내는 이체까지 넣어 두면 직접 적지 않아도 돼요.' })]));
 
   out.push(card({
     title: '분류와 예산',
