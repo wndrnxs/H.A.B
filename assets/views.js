@@ -8,6 +8,7 @@ import { areaChart, barChart, groupedBarChart, donutChart } from './charts.js';
 import {
   el, won, wonShort, wonPlain, today, toYMD, fromYMD, addMonths, addDays, startOfMonth, endOfMonth,
   periodRange, periodLabel, shiftPeriod, previousRange, prettyDate, shortDate, eachDay, monthKey,
+  daysBetween, untilParts,
   WEEKDAYS, sum, groupBy, uid,
 } from './util.js';
 
@@ -27,6 +28,7 @@ export function setFilter(patch) { Object.assign(ui.filter, patch); rerender(); 
 export const PAGES = [
   { id: 'dashboard', name: '대시보드', icon: '◎' },
   { id: 'assets', name: '자산', icon: '▤' },
+  { id: 'goals', name: '목표', icon: '⚑' },
   { id: 'txns', name: '내역', icon: '☰' },
   { id: 'settings', name: '설정', icon: '⚙' },
 ];
@@ -995,6 +997,208 @@ function hiddenCard(accounts, bal) {
   }));
 }
 
+// ── 목표 ─────────────────────────────────────────────────────────────────
+
+/**
+ * 목표 하나를 오늘 기준으로 풀어 본다.
+ * 모은 돈은 계좌를 연결했으면 그 잔액을, 아니면 직접 적은 값을 쓴다.
+ */
+function readGoal(g) {
+  const now = today();
+  const target = Math.max(0, Number(g.targetAmount) || 0);
+  const linked = g.accountId ? store.account(g.accountId) : null;
+  const saved = linked
+    ? Math.max(0, store.balances()[g.accountId] || 0)
+    : Math.max(0, Number(g.saved) || 0);
+  const left = Math.max(0, target - saved);
+  const ratio = target ? Math.min(1, saved / target) : 0;
+  const parts = untilParts(now, g.targetDate || now);
+  const overdue = (g.targetDate || now) < now;
+  const done = target > 0 && saved >= target;
+
+  // 달마다 한 번 넣는다고 보면, 남은 달 수에 이번 달 몫 하나를 더한 만큼 넣을 수 있다
+  const rounds = overdue ? 0 : parts.months + (parts.days > 0 ? 1 : 0);
+  const perMonth = done || rounds <= 0 ? 0 : Math.ceil(left / rounds / 1000) * 1000;
+  const perDay = done || parts.totalDays <= 0 ? 0 : Math.ceil(left / parts.totalDays / 100) * 100;
+
+  return { ...g, target, saved, left, ratio, parts, overdue, done, rounds, perMonth, perDay, linked };
+}
+
+function goalCard(g) {
+  const state = g.done ? 'good' : g.overdue ? 'crit' : g.ratio >= 0.8 ? 'good' : 'accent';
+  const dday = g.overdue
+    ? `D+${Math.abs(g.parts.totalDays)}`
+    : g.parts.totalDays === 0 ? 'D-DAY' : `D-${g.parts.totalDays}`;
+  const span = g.overdue
+    ? '목표일이 지났어요'
+    : g.parts.months > 0 ? `${g.parts.months}개월 ${g.parts.days}일 남음` : `${g.parts.days}일 남음`;
+
+  return card({ class: 'lift' }, [
+    el('div', { class: 'card-head' }, [
+      el('h2', { text: `${g.emoji || '⚑'} ${g.name}` }),
+      el('span', { class: 'sub', text: `${g.targetDate} · ${dday}` }),
+      el('span', { class: 'spacer' }),
+      el('button', { class: 'btn sm', text: '고치기', onclick: () => openGoalSheet(g) }),
+    ]),
+
+    el('div', { class: 'hero' }, [
+      el('div', { class: 'hero-main' }, [
+        el('span', { class: 'eyebrow', text: g.done ? '다 모았어요' : g.overdue ? '아직 모자란 돈' : '매달 넣어야 하는 돈' }),
+        el('span', { class: 'hero-figure', text: g.done ? won(g.saved) : g.overdue ? won(g.left) : won(g.perMonth) }),
+        el('span', { class: 'hero-note', text: g.done
+          ? '목표를 채웠어요. 축하해요!'
+          : g.overdue
+            ? `${dday} · 목표일을 다시 잡거나 모은 돈을 올려 주세요`
+            : `${g.rounds}번 더 넣으면 돼요 · 하루로 치면 ${won(g.perDay)}` }),
+      ]),
+      el('div', { class: 'hero-side' }, [
+        el('div', { class: 'kv' }, [el('span', { class: 'k', text: '목표' }), el('span', { class: 'v', text: won(g.target) })]),
+        el('div', { class: 'kv' }, [el('span', { class: 'k', text: '모은 돈' }), el('span', { class: 'v in', text: won(g.saved) })]),
+        el('div', { class: 'kv' }, [el('span', { class: 'k', text: '남은 돈' }), el('span', { class: 'v out', text: won(g.left) })]),
+        el('div', { class: 'kv' }, [el('span', { class: 'k', text: '남은 기간' }), el('span', { class: 'v', text: span })]),
+      ]),
+    ]),
+
+    el('div', { class: 'progress', style: 'margin:12px 0 0' }, [
+      el('div', { class: 'progress-head' }, [
+        el('span', { style: `color:var(--${state === 'accent' ? 'accent' : state});font-weight:600`, text: `${(g.ratio * 100).toFixed(g.ratio > 0 && g.ratio < 0.1 ? 1 : 0)}% 모음` }),
+        el('span', { class: 'spacer' }),
+        el('span', { class: 'k', style: 'font-size:12px;color:var(--ink-3)', text: g.linked ? `${g.linked.name} 잔액을 따라갑니다` : '직접 적은 금액' }),
+      ]),
+      el('span', { class: 'track' }, [el('span', { class: 'fill', style: `width:${g.ratio * 100}%;background:var(--${state === 'accent' ? 'accent' : state})` })]),
+    ]),
+  ]);
+}
+
+function viewGoals() {
+  const goals = (store.config.goals || []).map(readGoal)
+    .sort((a, b) => (a.done !== b.done ? (a.done ? 1 : -1) : (a.targetDate || '').localeCompare(b.targetDate || '')));
+  const out = [];
+
+  const live = goals.filter((g) => !g.done);
+  out.push(card({ class: 'lift' }, [
+    el('div', { class: 'hero' }, [
+      el('div', { class: 'hero-main' }, [
+        el('span', { class: 'eyebrow', text: '모으는 중인 목표' }),
+        el('span', { class: 'hero-figure', text: live.length ? won(sum(live, (g) => g.perMonth)) : '목표 없음' }),
+        el('span', { class: 'hero-note', text: live.length
+          ? `${live.length}개 목표를 다 맞추려면 매달 이만큼 넣어야 해요`
+          : '목표일과 목표 금액을 넣으면 매달 얼마씩 모아야 하는지 계산해 드려요' }),
+      ]),
+      el('div', { class: 'hero-side' }, [
+        el('div', { class: 'kv' }, [el('span', { class: 'k', text: '목표 합계' }), el('span', { class: 'v', text: won(sum(goals, (g) => g.target)) })]),
+        el('div', { class: 'kv' }, [el('span', { class: 'k', text: '모은 돈' }), el('span', { class: 'v in', text: won(sum(goals, (g) => g.saved)) })]),
+        el('div', { class: 'kv' }, [el('span', { class: 'k', text: '남은 돈' }), el('span', { class: 'v out', text: won(sum(goals, (g) => g.left)) })]),
+      ]),
+    ]),
+    el('div', { style: 'margin-top:12px' }, [
+      el('button', { class: 'btn primary', text: '＋ 목표 만들기', onclick: () => openGoalSheet(null) }),
+    ]),
+  ]));
+
+  if (!goals.length) {
+    out.push(card({}, [el('p', { class: 'empty', style: 'padding:24px 10px', text: '아직 목표가 없어요. 신혼여행 자금, 전세 보증금, 차 바꾸기 같은 것을 넣어 보세요.' })]));
+    return out;
+  }
+
+  // 둘씩 나란히 — 한 장씩 늘어놓으면 오른쪽이 빈다
+  for (let i = 0; i < goals.length; i += 2) {
+    out.push(pair(goalCard(goals[i]), goals[i + 1] ? goalCard(goals[i + 1]) : null));
+  }
+  return out;
+}
+
+/** 목표 하나를 만들거나 고친다 */
+function openGoalSheet(existing) {
+  const draft = existing ? { ...existing } : {
+    id: uid('g_'), name: '', emoji: '⚑', targetAmount: '',
+    targetDate: addMonths(today(), 12), saved: '', accountId: null,
+  };
+  const body = el('div', {});
+
+  const draw = () => {
+    const preview = readGoal({ ...draft, targetAmount: Number(draft.targetAmount) || 0, saved: Number(draft.saved) || 0 });
+    body.replaceChildren(
+      el('div', { class: 'field' }, [
+        el('label', { for: 'g-name', text: '무엇을 위해 모으나요' }),
+        el('div', { class: 'listline', style: 'border:0;padding:0;gap:8px' }, [
+          el('button', {
+            class: 'emoji-btn', type: 'button', text: draft.emoji, 'aria-label': '아이콘 바꾸기',
+            onclick: () => openEmojiSheet(draft.emoji, (emo) => { draft.emoji = emo; openGoalSheet(draft); }),
+          }),
+          el('input', {
+            id: 'g-name', type: 'text', value: draft.name, placeholder: '예: 신혼여행, 전세 보증금, 차 바꾸기',
+            oninput: (e) => { draft.name = e.target.value; },
+          }),
+        ]),
+      ]),
+      el('div', { class: 'row2' }, [
+        el('div', { class: 'field amount' }, [
+          el('label', { text: '목표 금액 (원)' }),
+          moneyInput({ value: draft.targetAmount === '' ? null : draft.targetAmount, placeholder: '0', label: '목표 금액', onCommit: (v) => { draft.targetAmount = v ?? ''; draw(); } }),
+        ]),
+        el('div', { class: 'field' }, [
+          el('label', { for: 'g-date', text: '목표일' }),
+          el('input', { id: 'g-date', type: 'date', value: draft.targetDate, min: today(), onchange: (e) => { draft.targetDate = e.target.value || today(); draw(); } }),
+        ]),
+      ]),
+      el('div', { class: 'field' }, [
+        el('label', { for: 'g-acct', text: '모은 돈을 어디서 셀까요' }),
+        el('select', { id: 'g-acct', onchange: (e) => { draft.accountId = e.target.value || null; draw(); } }, [
+          el('option', { value: '', text: '직접 적기', selected: !draft.accountId }),
+          ...store.config.accounts.map((a) => el('option', { value: a.id, text: `${a.name} 잔액 따라가기`, selected: draft.accountId === a.id })),
+        ]),
+        el('span', { class: 'hint', text: '계좌를 고르면 그 통장 잔액이 곧 모은 돈이 돼요. 따로 적을 필요가 없습니다.' }),
+      ]),
+      draft.accountId ? null : el('div', { class: 'field' }, [
+        el('label', { text: '지금까지 모은 돈 (원)' }),
+        moneyInput({ value: draft.saved === '' ? null : draft.saved, placeholder: '0', label: '모은 돈', onCommit: (v) => { draft.saved = v ?? ''; draw(); } }),
+      ]),
+      el('div', { class: 'banner' }, [
+        preview.target > 0 && !preview.overdue
+          ? el('span', {}, [
+            '매달 ', el('b', { class: 'num', text: won(preview.perMonth) }), ' 씩 ',
+            el('b', { text: `${preview.rounds}번` }), ' 넣으면 목표일에 맞출 수 있어요.',
+          ])
+          : el('span', { text: preview.overdue ? '목표일이 오늘보다 앞서 있어요.' : '목표 금액을 넣으면 매달 얼마씩 모아야 하는지 계산해 드려요.' }),
+      ]),
+    );
+  };
+  draw();
+
+  const save = async () => {
+    if (!draft.name.trim()) { toast('목표 이름을 넣어 주세요'); return; }
+    if (!draft.targetAmount || Number(draft.targetAmount) <= 0) { toast('목표 금액을 넣어 주세요'); return; }
+    const item = {
+      id: draft.id,
+      name: draft.name.trim(),
+      emoji: draft.emoji || '⚑',
+      targetAmount: Number(draft.targetAmount),
+      targetDate: draft.targetDate,
+      accountId: draft.accountId || null,
+      saved: draft.accountId ? 0 : Number(draft.saved) || 0,
+      createdAt: existing?.createdAt || Date.now(),
+    };
+    const list = store.config.goals || [];
+    await store.saveConfig({
+      goals: list.some((x) => x.id === item.id) ? list.map((x) => (x.id === item.id ? item : x)) : [...list, item],
+    });
+    closeSheet();
+    toast(existing ? '목표를 고쳤어요' : '목표를 만들었어요');
+  };
+
+  openSheet(existing ? '목표 고치기' : '목표 만들기', [body], [
+    el('button', { class: 'btn primary', text: '저장', onclick: save }),
+  ], existing ? [el('button', {
+    class: 'btn danger', text: '삭제',
+    onclick: () => confirmThen(`'${existing.name}' 목표를 지울까요?`, async () => {
+      await store.saveConfig({ goals: (store.config.goals || []).filter((x) => x.id !== existing.id) });
+      closeSheet();
+      toast('목표를 지웠어요');
+    }),
+  })] : []);
+}
+
 // ── 설정 ─────────────────────────────────────────────────────────────────
 
 /** 매달 자동으로 적히는 항목 하나를 만들거나 고친다 */
@@ -1746,6 +1950,7 @@ export function renderPage() {
   switch (ui.page) {
     case 'txns': return viewTxns();
     case 'assets': return viewAssets();
+    case 'goals': return viewGoals();
     case 'settings': return viewSettings();
     default: return viewDashboard();
   }

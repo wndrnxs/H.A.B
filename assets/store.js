@@ -32,6 +32,8 @@ function defaultConfig() {
     },
     // 매달 같은 날 자동으로 적히는 항목들
     recurring: [],
+    // 모으는 중인 목표들. config 에 있으니 계정(가계부)마다 남고 기기 사이에서 따라다닌다.
+    goals: [],
     // 지출을 사람별로 나누는 기능은 걷어냈다(통장을 사람별로 나눠 쓰기로 했다).
     // 이미 서버에 올라간 장부와 옛 기록이 이 항목을 갖고 있어 자리만 남겨 둔다.
     members: [
@@ -848,6 +850,7 @@ function migrate(config) {
     settings: { ...base.settings, ...(config.settings || {}) },
     members: config.members?.length ? config.members : base.members,
     recurring: config.recurring || [],
+    goals: config.goals || [],
     accounts: config.accounts?.length ? config.accounts : base.accounts,
     categories: config.categories?.length ? config.categories : base.categories,
   };

@@ -107,6 +107,26 @@ export function periodLabel(grain, anchor) {
   return `${d.getFullYear()}년 ${d.getMonth() + 1}월`;
 }
 
+/** 두 날짜 사이의 일수 (to - from) */
+export function daysBetween(from, to) {
+  return Math.round((fromYMD(to) - fromYMD(from)) / 86400000);
+}
+
+/**
+ * from 에서 to 까지 남은 기간을 '몇 개월 며칠' 로 쪼갠다.
+ * 달마다 길이가 달라서 일수를 30 으로 나누면 월말에 하루씩 어긋난다.
+ */
+export function untilParts(from, to) {
+  if (to <= from) return { months: 0, days: 0, totalDays: Math.min(0, daysBetween(from, to)) };
+  let months = 0;
+  let cursor = from;
+  while (addMonths(cursor, 1) <= to) {
+    cursor = addMonths(cursor, 1);
+    months += 1;
+  }
+  return { months, days: daysBetween(cursor, to), totalDays: daysBetween(from, to) };
+}
+
 /** 직전 동일 길이 기간 — "지난달 대비" 비교용 */
 export function previousRange(grain, anchor) {
   return periodRange(grain, shiftPeriod(grain, anchor, -1));
