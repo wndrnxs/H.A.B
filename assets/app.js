@@ -5,7 +5,7 @@ import {
   ui, PAGES, bindRender, setUi, renderPage, openTxnSheet, applyTheme, toast,
 } from './views.js';
 import { el, today, periodLabel, shiftPeriod } from './util.js';
-import { applyAccent, rememberedAccent, DEFAULT_ACCENT } from './accent.js';
+import { applyAccent, rememberedAccent } from './accent.js';
 
 const root = document.getElementById('app-root');
 
@@ -87,7 +87,7 @@ function render() {
 
 bindRender(render);
 store.on(() => {
-  if (store.ready) applyAccent(store.config.settings.accent || DEFAULT_ACCENT);
+  if (store.ready) applyAccent(store.config.settings.accent);
   render();
 });
 
@@ -97,7 +97,7 @@ applyAccent(rememberedAccent());
 render();
 
 store.init().then(() => {
-  applyAccent(store.config.settings.accent || DEFAULT_ACCENT);
+  applyAccent(store.config.settings.accent);
   render();
 }).catch((err) => {
   console.error(err);

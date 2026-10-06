@@ -4,7 +4,7 @@
 import { store, ACCOUNT_TYPES, buildSampleData } from './store.js';
 import { prettyCode } from './firebase.js';
 import { APP_VERSION } from './version.js';
-import { ACCENTS, applyAccent, DEFAULT_ACCENT } from './accent.js';
+import { applyAccent, normalize, deriveAccent, maxChroma, oklchToRgbClipped, MAX_CHROMA, PRESETS } from './accent.js';
 import { areaChart, barChart, groupedBarChart, donutChart } from './charts.js';
 import {
   el, won, wonShort, wonPlain, today, toYMD, fromYMD, addMonths, addDays, startOfMonth, endOfMonth,
@@ -1323,18 +1323,186 @@ function openGoalSheet(existing) {
 
 // ── 설정 ─────────────────────────────────────────────────────────────────
 
+/**
+ * 제목을 그 자리에서 고치는 입력칸.
+ * 입력칸은 폭이 고정되면 긴 이름이 잘리니, 글자 수를 틀(.titlefit)에 알려 주고
+ * 틀이 넓어지는 만큼 칸도 같이 넓어지게 한다.
+ */
+function titleInput(value, label, onCommit) {
+  return el('span', { class: 'titlefit', 'data-value': value }, [
+    el('input', {
+      class: 'titleinput', type: 'text', value, 'aria-label': label,
+      oninput: (e) => { e.target.parentElement.dataset.value = e.target.value; },
+      onchange: (e) => onCommit(e.target.value.trim() || '이름 없음'),
+    }),
+  ]);
+}
+
+const wheelCache = new Map();
+
+/**
+ * 색상환 한 장을 그린다. 중심에서 멀어지면 선명해지고, 각도가 색조다.
+ * 화면이 낼 수 없는 색은 선명도를 깎아 그린다 — 눌렀을 때 입혀지는 색과
+ * 보이는 색을 같게 하려는 것이다.
+ */
+function paintWheel(canvas, px, L, cScale) {
+  const ctx = canvas.getContext('2d');
+  const key = `${px}|${L}|${cScale}`;
+  const hit = wheelCache.get(key);
+  if (hit) { ctx.putImageData(hit, 0, 0); return; }
+
+  const img = ctx.createImageData(px, px);
+  const mid = px / 2;
+  const cap = [];
+  for (let h = 0; h < 360; h += 1) cap.push(maxChroma(L, h));
+  for (let y = 0; y < px; y += 1) {
+    for (let x = 0; x < px; x += 1) {
+      const dx = x - mid + 0.5;
+      const dy = y - mid + 0.5;
+      const d = Math.hypot(dx, dy);
+      if (d > mid) continue;
+      const h = ((Math.atan2(-dy, dx) * 180) / Math.PI + 360) % 360;
+      const c = Math.min((d / mid) * MAX_CHROMA * cScale, cap[Math.round(h) % 360]);
+      const [r, g, b] = oklchToRgbClipped(L, c, h);
+      const i = (y * px + x) * 4;
+      img.data[i] = r;
+      img.data[i + 1] = g;
+      img.data[i + 2] = b;
+      img.data[i + 3] = Math.round(Math.min(1, mid - d) * 255);
+    }
+  }
+  wheelCache.set(key, img);
+  ctx.putImageData(img, 0, 0);
+}
+
+/**
+ * 강조색 고르기.
+ * 색상환에서 색조와 선명도만 집고 밝기는 앱이 정한다. 그래서 어떤 색을 골라도
+ * 버튼 위의 글씨가 읽히고, 다크 모드에서도 색이 묻히지 않는다.
+ * 환에 보이는 색이 곧 지금 테마에서 입혀지는 색이다.
+ */
+function accentField() {
+  const SIZE = 156;
+  const px = SIZE * 2;
+  const root = document.documentElement;
+  const set = root.getAttribute('data-theme');
+  const dark = set === 'dark' || (!set && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  const L = dark ? 0.78 : 0.42;
+  const cScale = dark ? 0.85 : 1;
+
+  let sel = normalize(store.config.settings.accent);
+
+  const canvas = el('canvas', { width: String(px), height: String(px), style: `width:${SIZE}px;height:${SIZE}px` });
+  const dot = el('span', { class: 'wheel-dot' });
+  const readout = el('span', { class: 'hint' });
+
+  const pick = (h, c, save) => {
+    sel = {
+      h: ((h % 360) + 360) % 360,
+      c: Math.max(0, Math.min(MAX_CHROMA, c)),
+    };
+    applyAccent(sel);
+    show();
+    if (save) {
+      store.saveConfig({ settings: { ...store.config.settings, accent: sel } });
+      // 저장하면 화면을 다시 그리니, 방향키로 고르던 중이었다면 환으로 초점을 돌려준다
+      setTimeout(() => {
+        const again = document.getElementById('accent-wheel');
+        if (again && document.activeElement !== again) again.focus();
+      }, 0);
+    }
+  };
+
+  const presets = el('div', { class: 'swatches' }, PRESETS.map((pr) => {
+    const a = deriveAccent(pr.h, pr.c);
+    return el('button', {
+      class: 'swatchbtn', type: 'button', 'data-key': pr.key, 'aria-label': pr.name,
+      style: `--sw:${a.light.base};--swd:${a.dark.base}`,
+      onclick: () => pick(pr.h, pr.c, true),
+    }, [el('span', { class: 'chip-name', text: pr.name })]);
+  }));
+
+  function show() {
+    const r = sel.c / MAX_CHROMA;
+    const a = (sel.h * Math.PI) / 180;
+    dot.style.left = `${50 + Math.cos(a) * r * 50}%`;
+    dot.style.top = `${50 - Math.sin(a) * r * 50}%`;
+    readout.textContent = `색조 ${Math.round(sel.h)}° · 선명도 ${Math.round(r * 100)}%`;
+    for (const btn of presets.children) {
+      const pr = PRESETS.find((x) => x.key === btn.dataset.key);
+      const dh = Math.abs(((pr.h - sel.h + 540) % 360) - 180);
+      btn.setAttribute('aria-pressed', dh < 2 && Math.abs(pr.c - sel.c) < 0.006 ? 'true' : 'false');
+    }
+  }
+
+  const fromPoint = (e, save) => {
+    const box = wrap.getBoundingClientRect();
+    const dx = e.clientX - box.left - box.width / 2;
+    const dy = e.clientY - box.top - box.height / 2;
+    const r = Math.min(1, Math.hypot(dx, dy) / (box.width / 2));
+    pick((Math.atan2(-dy, dx) * 180) / Math.PI, r * MAX_CHROMA, save);
+  };
+
+  let keyTimer = 0;
+  const wrap = el('div', {
+    class: 'wheelwrap', id: 'accent-wheel', tabindex: '0', role: 'application',
+    'aria-label': '강조색 색상환. 좌우 방향키로 색을, 위아래 방향키로 선명도를 바꿔요',
+    style: `width:${SIZE}px;height:${SIZE}px`,
+    onpointerdown: (e) => {
+      e.preventDefault();
+      wrap.focus();
+      fromPoint(e, false);
+      // 끌고 있는 동안에는 바로 입혀서 보여 주고, 손을 뗄 때 한 번만 저장한다
+      const move = (ev) => fromPoint(ev, false);
+      const up = (ev) => {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        window.removeEventListener('pointercancel', up);
+        fromPoint(ev, true);
+      };
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+      window.addEventListener('pointercancel', up);
+    },
+    onkeydown: (e) => {
+      const step = {
+        ArrowRight: [4, 0], ArrowLeft: [-4, 0], ArrowUp: [0, 0.01], ArrowDown: [0, -0.01],
+      }[e.key];
+      if (!step) return;
+      e.preventDefault();
+      pick(sel.h + step[0], sel.c + step[1], false);
+      // 누를 때마다 저장하면 화면이 계속 다시 그려진다. 손을 멈춘 뒤에 한 번만.
+      clearTimeout(keyTimer);
+      keyTimer = setTimeout(() => pick(sel.h, sel.c, true), 500);
+    },
+  }, [canvas, dot]);
+
+  paintWheel(canvas, px, L, cScale);
+  show();
+
+  return el('div', { class: 'field' }, [
+    el('label', { text: '강조색' }),
+    el('div', { class: 'accentpick' }, [
+      wrap,
+      el('div', { class: 'side' }, [
+        presets,
+        readout,
+        el('span', { class: 'hint', text: '버튼과 선택 표시에 쓰이는 색이에요. 밝기는 앱이 맞춰 주니 색만 고르면 돼요. 함께 쓰는 사람 모두에게 같은 색으로 보입니다.' }),
+      ]),
+    ]),
+  ]);
+}
+
+
 /** 고정 내역 묶음 한 장. 제목을 그 자리에서 고칠 수 있다. */
 function recurringGroupCard(group, items) {
   const groups = store.config.recurringGroups || [];
   const monthly = sum(items.filter((r) => r.active && r.kind === 'expense'), (r) => r.amount);
 
   const head = el('div', { class: 'card-head' }, [
-    el('input', {
-      class: 'titleinput', type: 'text', value: group.name, 'aria-label': '묶음 이름',
-      onchange: (e) => store.saveConfig({
-        recurringGroups: groups.map((x) => (x.id === group.id ? { ...x, name: e.target.value.trim() || '이름 없음' } : x)),
-      }),
-    }),
+    titleInput(group.name, '묶음 이름', (name) => store.saveConfig({
+      recurringGroups: groups.map((x) => (x.id === group.id ? { ...x, name } : x)),
+    })),
     el('span', { class: 'sub', text: items.length ? `${items.length}건 · 매달 지출 ${won(monthly)}` : '아직 비어 있어요' }),
     el('span', { class: 'spacer' }),
     el('button', { class: 'btn sm', text: '+ 추가', onclick: () => openRecurringSheet(null, group.id) }),
@@ -1518,19 +1686,7 @@ function viewSettings() {
       ]),
       el('span', { class: 'hint', text: '둘이 돈을 모아 쓰는 통장을 고르면 대시보드에 분담과 잔액이 따로 보여요.' }),
     ]),
-    el('div', { class: 'field' }, [
-      el('label', { text: '강조색' }),
-      el('div', { class: 'swatches' }, Object.entries(ACCENTS).map(([key, a]) => el('button', {
-        class: 'swatchbtn', type: 'button', title: a.name,
-        'aria-label': a.name, 'aria-pressed': (cfg.settings.accent || DEFAULT_ACCENT) === key ? 'true' : 'false',
-        style: `--sw:${a.light.base};--swd:${a.dark.base}`,
-        onclick: () => {
-          applyAccent(key);
-          store.saveConfig({ settings: { ...store.config.settings, accent: key } });
-        },
-      }, [el('span', { class: 'chip-name', text: a.name })]))),
-      el('span', { class: 'hint', text: '버튼과 선택 표시에 쓰이는 색이에요. 함께 쓰는 사람 모두에게 같은 색으로 보입니다.' }),
-    ]),
+    accentField(),
     el('div', { class: 'field' }, [
       el('label', { text: '화면 테마' }),
       el('div', { class: 'picker' }, ['system', 'light', 'dark'].map((v) => el('button', {

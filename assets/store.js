@@ -29,7 +29,8 @@ function defaultConfig() {
       openingDate: opening,
       startPage: 'dashboard',
       sharedAccountId: 'a_living',
-      accent: 'green',
+      // 강조색은 색조(hue)와 선명도(chroma)로 적는다. 밝기는 앱이 정한다.
+      accent: { h: 162, c: 0.09 },
     },
     // 매달 같은 날 자동으로 적히는 항목들. 묶음으로 나눠 담는다(공동/개인 등).
     recurringGroups: [{ id: 'rg_home', name: '공동' }],

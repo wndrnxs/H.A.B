@@ -161,12 +161,21 @@ button { cursor: pointer; }
 .card-head { display: flex; align-items: baseline; gap: 4px 10px; margin-bottom: 9px; flex-wrap: wrap; }
 .card-head .btn { white-space: nowrap; }
 .card-head h2 { font-size: 14px; letter-spacing: .01em; }
-/* 카드 제목을 그 자리에서 고치는 입력칸 — 평소엔 제목처럼 보인다 */
-.titleinput {
-  font-size: 14px; font-weight: 600; letter-spacing: .01em; color: var(--ink);
-  border: 1px solid transparent; background: none; border-radius: 7px;
-  padding: 2px 6px; margin-left: -6px; width: 9em; min-width: 0;
+/* 카드 제목을 그 자리에서 고치는 입력칸 — 평소엔 제목처럼 보인다.
+   입력칸은 폭이 고정되면 긴 이름이 잘린다. 같은 글자를 숨겨서 깔아 둔 칸과
+   겹쳐 놓고, 그 칸이 글자 수만큼 넓어지는 대로 입력칸도 같이 넓어지게 한다. */
+.titlefit {
+  display: inline-grid; align-items: center;
+  margin-left: -6px; min-width: 4.5em; max-width: 100%;
 }
+.titlefit::after, .titleinput {
+  grid-area: 1 / 1;
+  font-family: inherit; font-size: 14px; font-weight: 600; letter-spacing: .01em; line-height: 1.45;
+  padding: 2px 6px; border: 1px solid transparent; border-radius: 7px;
+}
+/* 뒤에 공백 한 칸을 붙여, 마지막 글자가 테두리에 닿지 않게 한다 */
+.titlefit::after { content: attr(data-value) ' '; visibility: hidden; white-space: pre; }
+.titleinput { color: var(--ink); background: none; width: 100%; min-width: 0; }
 .titleinput:hover { border-color: var(--line); background: var(--surface-2); }
 .titleinput:focus { border-color: var(--accent); background: var(--surface); outline: none; }
 .card-head .sub { font-size: 12px; color: var(--ink-3); }
@@ -409,6 +418,21 @@ table.data td.n { font-family: var(--font-mono); font-variant-numeric: tabular-n
 }
 .emoji-btn:hover { border-color: var(--accent); }
 .emoji-btn[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+/* 강조색 고르기 — 색상환 + 자주 쓰는 색 몇 개 */
+.accentpick { display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: flex-start; }
+.wheelwrap {
+  position: relative; flex: none; border-radius: 50%; touch-action: none;
+  box-shadow: 0 0 0 1px var(--line); cursor: crosshair;
+}
+.wheelwrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.wheelwrap canvas { display: block; border-radius: 50%; }
+.wheel-dot {
+  position: absolute; width: 18px; height: 18px; margin: -9px 0 0 -9px;
+  border-radius: 50%; border: 2.5px solid #fff; background: none;
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, .55), 0 1px 4px rgba(0, 0, 0, .35);
+  pointer-events: none;
+}
+.accentpick .side { display: flex; flex-direction: column; gap: 9px; min-width: 0; flex: 1 1 190px; max-width: 420px; }
 .swatches { display: flex; flex-wrap: wrap; gap: 8px; }
 .swatchbtn {
   display: inline-flex; align-items: center; gap: 7px;
