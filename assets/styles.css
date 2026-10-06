@@ -237,6 +237,9 @@ button { cursor: pointer; }
 .btn.danger { color: var(--crit); border-color: color-mix(in srgb, var(--crit) 35%, var(--line)); }
 .btn.sm { padding: 5px 10px; font-size: 12.5px; border-radius: 8px; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
+/* 메모 유무를 점으로 알리되, 줄마다 버튼 너비가 달라지지 않게 자리는 늘 잡아 둔다 */
+.notebtn .dot { font-size: 8px; margin-left: 5px; vertical-align: 2px; visibility: hidden; }
+.notebtn.has .dot { visibility: visible; color: var(--accent); }
 
 /* ── 거래 목록 ─────────────────────────────────────────────────────────── */
 .daygroup { display: flex; flex-direction: column; }

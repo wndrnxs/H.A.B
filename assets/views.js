@@ -1537,11 +1537,12 @@ function viewSettings() {
         opening: ACCOUNT_TYPES[a.type]?.liability ? -Math.abs(v || 0) : Math.round(v || 0),
       }),
     }),
+    // 점은 늘 자리를 잡고 있고 보이기만 켜고 끈다. 글자가 늘면 그 줄만 너비가 달라진다.
     el('button', {
-      class: 'btn sm', title: a.note || '이 계좌 잔액이 어떤 돈인지 적어 둡니다',
-      text: a.note ? '메모 ●' : '메모',
+      class: `btn sm notebtn ${a.note ? 'has' : ''}`,
+      title: a.note || '이 계좌 잔액이 어떤 돈인지 적어 둡니다',
       onclick: () => openAccountNoteSheet(a),
-    }),
+    }, ['메모', el('span', { class: 'dot', text: '●' })]),
     el('button', {
       class: 'chip', 'aria-pressed': a.offDashboard ? 'false' : 'true',
       text: '장부에 표시', title: '끄면 대시보드와 자산 화면의 순자산 계산에서 빠집니다. 거래 기록은 그대로 남습니다.',
