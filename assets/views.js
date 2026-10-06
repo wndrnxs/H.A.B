@@ -1012,16 +1012,30 @@ function readGoal(g) {
     : Math.max(0, Number(g.saved) || 0);
   const left = Math.max(0, target - saved);
   const ratio = target ? Math.min(1, saved / target) : 0;
-  const parts = untilParts(now, g.targetDate || now);
-  const overdue = (g.targetDate || now) < now;
+  const end = g.targetDate || now;
+  const start = g.startDate || now;
+  const overdue = end < now;
   const done = target > 0 && saved >= target;
+  const notStarted = start > now;
 
+  // 아직 시작 전이면 시작일부터, 이미 시작했으면 오늘부터 남은 기간을 센다
+  const parts = untilParts(notStarted ? start : now, end);
   // 달마다 한 번 넣는다고 보면, 남은 달 수에 이번 달 몫 하나를 더한 만큼 넣을 수 있다
   const rounds = overdue ? 0 : parts.months + (parts.days > 0 ? 1 : 0);
   const perMonth = done || rounds <= 0 ? 0 : Math.ceil(left / rounds / 1000) * 1000;
   const perDay = done || parts.totalDays <= 0 ? 0 : Math.ceil(left / parts.totalDays / 100) * 100;
+  const startsIn = notStarted ? daysBetween(now, start) : 0;
 
-  return { ...g, target, saved, left, ratio, parts, overdue, done, rounds, perMonth, perDay, linked };
+  // 시작일부터 목표일까지 고르게 모은다고 보면 지금쯤 얼마가 있어야 하나
+  const span = Math.max(1, daysBetween(start, end));
+  const gone = Math.max(0, Math.min(span, daysBetween(start, now)));
+  const onPlan = target * (gone / span);
+  const ahead = saved - onPlan;
+
+  return {
+    ...g, target, saved, left, ratio, parts, overdue, done, notStarted, startsIn,
+    rounds, perMonth, perDay, linked, start, end, onPlan, ahead, span, gone,
+  };
 }
 
 function goalCard(g) {
@@ -1031,7 +1045,16 @@ function goalCard(g) {
     : g.parts.totalDays === 0 ? 'D-DAY' : `D-${g.parts.totalDays}`;
   const span = g.overdue
     ? '목표일이 지났어요'
-    : g.parts.months > 0 ? `${g.parts.months}개월 ${g.parts.days}일 남음` : `${g.parts.days}일 남음`;
+    : g.parts.months > 0
+      ? `${g.parts.months}개월${g.parts.days ? ` ${g.parts.days}일` : ''} 남음`
+      : `${g.parts.days}일 남음`;
+  // 계획보다 앞서는지 뒤처지는지. 목표의 2% 안쪽 차이는 '계획대로' 로 본다.
+  const slack = Math.max(10000, g.target * 0.02);
+  const round1k = (v) => Math.round(v / 1000) * 1000;
+  const pace = g.done || g.notStarted || g.target <= 0 ? null
+    : g.ahead > slack ? { text: `계획보다 ${won(round1k(g.ahead))} 앞서요`, color: 'good' }
+      : g.ahead < -slack ? { text: `계획보다 ${won(round1k(-g.ahead))} 뒤처져요`, color: 'crit' }
+        : { text: '계획대로 가고 있어요', color: 'good' };
 
   return card({ class: 'lift' }, [
     el('div', { class: 'card-head' }, [
@@ -1043,13 +1066,15 @@ function goalCard(g) {
 
     el('div', { class: 'hero' }, [
       el('div', { class: 'hero-main' }, [
-        el('span', { class: 'eyebrow', text: g.done ? '다 모았어요' : g.overdue ? '아직 모자란 돈' : '매달 넣어야 하는 돈' }),
+        el('span', { class: 'eyebrow', text: g.done ? '다 모았어요' : g.overdue ? '아직 모자란 돈' : g.notStarted ? `${g.startsIn}일 뒤부터 매달` : '매달 넣어야 하는 돈' }),
         el('span', { class: 'hero-figure', text: g.done ? won(g.saved) : g.overdue ? won(g.left) : won(g.perMonth) }),
         el('span', { class: 'hero-note', text: g.done
           ? '목표를 채웠어요. 축하해요!'
           : g.overdue
             ? `${dday} · 목표일을 다시 잡거나 모은 돈을 올려 주세요`
-            : `${g.rounds}번 더 넣으면 돼요 · 하루로 치면 ${won(g.perDay)}` }),
+            : g.notStarted
+              ? `${g.start}부터 ${g.rounds}번 넣으면 돼요`
+              : `${g.rounds}번 더 넣으면 돼요 · 하루로 치면 ${won(g.perDay)}` }),
       ]),
       el('div', { class: 'hero-side' }, [
         el('div', { class: 'kv' }, [el('span', { class: 'k', text: '목표' }), el('span', { class: 'v', text: won(g.target) })]),
@@ -1063,9 +1088,21 @@ function goalCard(g) {
       el('div', { class: 'progress-head' }, [
         el('span', { style: `color:var(--${state === 'accent' ? 'accent' : state});font-weight:600`, text: `${(g.ratio * 100).toFixed(g.ratio > 0 && g.ratio < 0.1 ? 1 : 0)}% 모음` }),
         el('span', { class: 'spacer' }),
-        el('span', { class: 'k', style: 'font-size:12px;color:var(--ink-3)', text: g.linked ? `${g.linked.name} 잔액을 따라갑니다` : '직접 적은 금액' }),
+        el('span', { class: 'k', style: 'font-size:12px;color:var(--ink-3)', text: `${g.start} → ${g.end}${g.linked ? ` · ${g.linked.name} 잔액으로 자동 계산` : ''}` }),
       ]),
-      el('span', { class: 'track' }, [el('span', { class: 'fill', style: `width:${g.ratio * 100}%;background:var(--${state === 'accent' ? 'accent' : state})` })]),
+      el('span', { class: 'track' }, [
+        el('span', { class: 'fill', style: `width:${g.ratio * 100}%;background:var(--${state === 'accent' ? 'accent' : state})` }),
+        // 시작일부터 목표일까지 고르게 모았다면 지금쯤 와 있어야 할 자리
+        pace ? el('span', {
+          class: 'mark', style: `left:${Math.min(100, (g.onPlan / (g.target || 1)) * 100)}%`,
+          title: `계획대로라면 지금쯤 ${won(g.onPlan)}`,
+        }) : null,
+      ]),
+      pace ? el('div', { class: 'progress-head' }, [
+        el('span', { style: `color:var(--${pace.color});font-weight:600`, text: pace.text }),
+        el('span', { class: 'spacer' }),
+        el('span', { style: 'color:var(--ink-3)', text: `계획대로라면 지금쯤 ${won(Math.round(g.onPlan / 1000) * 1000)}` }),
+      ]) : null,
     ]),
   ]);
 }
@@ -1112,7 +1149,7 @@ function viewGoals() {
 function openGoalSheet(existing) {
   const draft = existing ? { ...existing } : {
     id: uid('g_'), name: '', emoji: '⚑', targetAmount: '',
-    targetDate: addMonths(today(), 12), saved: '', accountId: null,
+    startDate: today(), targetDate: addMonths(today(), 12), saved: '', accountId: null,
   };
   const body = el('div', {});
 
@@ -1124,7 +1161,7 @@ function openGoalSheet(existing) {
         el('div', { class: 'listline', style: 'border:0;padding:0;gap:8px' }, [
           el('button', {
             class: 'emoji-btn', type: 'button', text: draft.emoji, 'aria-label': '아이콘 바꾸기',
-            onclick: () => openEmojiSheet(draft.emoji, (emo) => { draft.emoji = emo; openGoalSheet(draft); }),
+            onclick: () => openEmojiSheet(draft.emoji, (emo) => openGoalSheet({ ...draft, emoji: emo })),
           }),
           el('input', {
             id: 'g-name', type: 'text', value: draft.name, placeholder: '예: 신혼여행, 전세 보증금, 차 바꾸기',
@@ -1132,31 +1169,49 @@ function openGoalSheet(existing) {
           }),
         ]),
       ]),
+      el('div', { class: 'field amount' }, [
+        el('label', { text: '목표 금액 (원)' }),
+        moneyInput({ value: draft.targetAmount === '' ? null : draft.targetAmount, placeholder: '0', label: '목표 금액', onCommit: (v) => { draft.targetAmount = v ?? ''; draw(); } }),
+      ]),
       el('div', { class: 'row2' }, [
-        el('div', { class: 'field amount' }, [
-          el('label', { text: '목표 금액 (원)' }),
-          moneyInput({ value: draft.targetAmount === '' ? null : draft.targetAmount, placeholder: '0', label: '목표 금액', onCommit: (v) => { draft.targetAmount = v ?? ''; draw(); } }),
+        el('div', { class: 'field' }, [
+          el('label', { for: 'g-start', text: '모으기 시작하는 날' }),
+          el('input', { id: 'g-start', type: 'date', value: draft.startDate, onchange: (e) => { draft.startDate = e.target.value || today(); draw(); } }),
         ]),
         el('div', { class: 'field' }, [
           el('label', { for: 'g-date', text: '목표일' }),
-          el('input', { id: 'g-date', type: 'date', value: draft.targetDate, min: today(), onchange: (e) => { draft.targetDate = e.target.value || today(); draw(); } }),
+          el('input', { id: 'g-date', type: 'date', value: draft.targetDate, min: draft.startDate, onchange: (e) => { draft.targetDate = e.target.value || today(); draw(); } }),
         ]),
       ]),
       el('div', { class: 'field' }, [
-        el('label', { for: 'g-acct', text: '모은 돈을 어디서 셀까요' }),
-        el('select', { id: 'g-acct', onchange: (e) => { draft.accountId = e.target.value || null; draw(); } }, [
-          el('option', { value: '', text: '직접 적기', selected: !draft.accountId }),
-          ...store.config.accounts.map((a) => el('option', { value: a.id, text: `${a.name} 잔액 따라가기`, selected: draft.accountId === a.id })),
+        el('label', { text: '모은 돈을 어떻게 셀까요' }),
+        el('div', { class: 'picker' }, [
+          el('button', {
+            'aria-pressed': !draft.accountId ? 'true' : 'false', text: '내가 직접 입력',
+            onclick: () => { draft.accountId = null; draw(); },
+          }),
+          el('button', {
+            'aria-pressed': draft.accountId ? 'true' : 'false', text: '통장 잔액에서 자동으로',
+            onclick: () => { draft.accountId = draft.accountId || store.config.accounts[0]?.id || null; draw(); },
+          }),
         ]),
-        el('span', { class: 'hint', text: '계좌를 고르면 그 통장 잔액이 곧 모은 돈이 돼요. 따로 적을 필요가 없습니다.' }),
       ]),
-      draft.accountId ? null : el('div', { class: 'field' }, [
-        el('label', { text: '지금까지 모은 돈 (원)' }),
-        moneyInput({ value: draft.saved === '' ? null : draft.saved, placeholder: '0', label: '모은 돈', onCommit: (v) => { draft.saved = v ?? ''; draw(); } }),
-      ]),
+      draft.accountId
+        ? el('div', { class: 'field' }, [
+          el('label', { for: 'g-acct', text: '어느 통장' }),
+          el('select', { id: 'g-acct', onchange: (e) => { draft.accountId = e.target.value; draw(); } },
+            store.config.accounts.map((a) => el('option', { value: a.id, text: a.name, selected: draft.accountId === a.id }))),
+          el('span', { class: 'hint', text: '이 통장에 돈을 넣을 때마다 모은 돈이 저절로 올라가요. 목표에 따로 적을 필요가 없습니다.' }),
+        ])
+        : el('div', { class: 'field amount' }, [
+          el('label', { text: '지금까지 모은 돈 (원)' }),
+          moneyInput({ value: draft.saved === '' ? null : draft.saved, placeholder: '0', label: '모은 돈', onCommit: (v) => { draft.saved = v ?? ''; draw(); } }),
+          el('span', { class: 'hint', text: '돈을 넣을 때마다 이 숫자를 직접 고쳐 주셔야 해요.' }),
+        ]),
       el('div', { class: 'banner' }, [
         preview.target > 0 && !preview.overdue
           ? el('span', {}, [
+            preview.notStarted ? `${preview.start}부터 ` : '',
             '매달 ', el('b', { class: 'num', text: won(preview.perMonth) }), ' 씩 ',
             el('b', { text: `${preview.rounds}번` }), ' 넣으면 목표일에 맞출 수 있어요.',
           ])
@@ -1169,11 +1224,13 @@ function openGoalSheet(existing) {
   const save = async () => {
     if (!draft.name.trim()) { toast('목표 이름을 넣어 주세요'); return; }
     if (!draft.targetAmount || Number(draft.targetAmount) <= 0) { toast('목표 금액을 넣어 주세요'); return; }
+    if (draft.targetDate <= draft.startDate) { toast('목표일은 시작일보다 뒤여야 해요'); return; }
     const item = {
       id: draft.id,
       name: draft.name.trim(),
       emoji: draft.emoji || '⚑',
       targetAmount: Number(draft.targetAmount),
+      startDate: draft.startDate || today(),
       targetDate: draft.targetDate,
       accountId: draft.accountId || null,
       saved: draft.accountId ? 0 : Number(draft.saved) || 0,

@@ -293,6 +293,9 @@ button { cursor: pointer; }
 .progress-head .spacer { flex: 1; }
 .progress .track { height: 9px; border-radius: 5px; background: var(--grid); overflow: hidden; display: block; }
 .progress .fill { display: block; height: 100%; border-radius: 5px; min-width: 2px; }
+.progress .track { position: relative; }
+/* 계획대로라면 지금쯤 와 있어야 할 자리 */
+.progress .mark { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--ink); opacity: .45; border-radius: 1px; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; }
 .legend .li { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
 .legend .sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
