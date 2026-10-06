@@ -4,6 +4,7 @@
 import { store, ACCOUNT_TYPES, buildSampleData } from './store.js';
 import { prettyCode } from './firebase.js';
 import { APP_VERSION } from './version.js';
+import { ACCENTS, applyAccent, DEFAULT_ACCENT } from './accent.js';
 import { areaChart, barChart, groupedBarChart, donutChart } from './charts.js';
 import {
   el, won, wonShort, wonPlain, today, toYMD, fromYMD, addMonths, addDays, startOfMonth, endOfMonth,
@@ -1322,11 +1323,74 @@ function openGoalSheet(existing) {
 
 // ── 설정 ─────────────────────────────────────────────────────────────────
 
+/** 고정 내역 묶음 한 장. 제목을 그 자리에서 고칠 수 있다. */
+function recurringGroupCard(group, items) {
+  const groups = store.config.recurringGroups || [];
+  const monthly = sum(items.filter((r) => r.active && r.kind === 'expense'), (r) => r.amount);
+
+  const head = el('div', { class: 'card-head' }, [
+    el('input', {
+      class: 'titleinput', type: 'text', value: group.name, 'aria-label': '묶음 이름',
+      onchange: (e) => store.saveConfig({
+        recurringGroups: groups.map((x) => (x.id === group.id ? { ...x, name: e.target.value.trim() || '이름 없음' } : x)),
+      }),
+    }),
+    el('span', { class: 'sub', text: items.length ? `${items.length}건 · 매달 지출 ${won(monthly)}` : '아직 비어 있어요' }),
+    el('span', { class: 'spacer' }),
+    el('button', { class: 'btn sm', text: '+ 추가', onclick: () => openRecurringSheet(null, group.id) }),
+    groups.length > 1 ? el('button', {
+      class: 'btn sm danger', text: '묶음 삭제',
+      onclick: () => confirmThen(
+        items.length
+          ? `'${group.name}' 묶음을 지울까요? 안에 있던 ${items.length}건은 '${groups.find((x) => x.id !== group.id).name}' 으로 옮겨져요.`
+          : `'${group.name}' 묶음을 지울까요?`,
+        async () => {
+          const fallback = groups.find((x) => x.id !== group.id).id;
+          await store.saveConfig({
+            recurringGroups: groups.filter((x) => x.id !== group.id),
+            recurring: (store.config.recurring || []).map((r) => (
+              (r.groupId || groups[0]?.id) === group.id ? { ...r, groupId: fallback } : r)),
+          });
+          toast('묶음을 지웠어요');
+        },
+      ),
+    }) : null,
+  ]);
+
+  const rows = items.length
+    ? [sortableList('recurring', items, (r) => el('div', { class: 'listline' }, [
+      el('button', {
+        class: 'chip', 'aria-pressed': r.active ? 'true' : 'false',
+        text: r.active ? '켬' : '끔', title: '끄면 다음 달부터 적히지 않아요',
+        onclick: () => store.saveConfig({
+          recurring: store.config.recurring.map((x) => (x.id === r.id ? { ...x, active: !x.active } : x)),
+        }),
+      }),
+      el('button', {
+        class: 'btn sm ghost', style: 'flex:1;justify-content:flex-start;text-align:left',
+        text: `${r.name || '이름 없음'}`, onclick: () => openRecurringSheet(r),
+      }),
+      el('span', { class: 'tag', text: { expense: '지출', income: '수입', transfer: '이체' }[r.kind] || '지출' }),
+      el('span', { class: 'tag', text: `매월 ${r.day}일` }),
+      r.kind === 'transfer'
+        ? el('span', { class: 'tag', text: `${store.account(r.accountId)?.name || '?'} → ${store.account(r.toAccountId)?.name || '?'}` })
+        : null,
+      el('span', { class: 'spacer' }),
+      el('span', { class: 'num', style: `font-weight:600;color:var(--${r.kind === 'income' ? 'in' : r.kind === 'transfer' ? 'ink-3' : 'out'})`, text: won(r.amount) }),
+      el('button', { class: 'btn sm', text: '고치기', onclick: () => openRecurringSheet(r) }),
+    ]))]
+    : [el('p', { class: 'empty', text: '월세·통신비처럼 매달 나가는 돈, 급여처럼 들어오는 돈, 급여일에 다른 통장으로 보내는 이체를 넣어 두면 직접 적지 않아도 돼요.' })];
+
+  return el('section', { class: 'card' }, [head, ...rows]);
+}
+
 /** 매달 자동으로 적히는 항목 하나를 만들거나 고친다 */
-function openRecurringSheet(existing) {
+function openRecurringSheet(existing, groupId) {
   const cats = () => store.config.categories;
+  const groups = store.config.recurringGroups || [];
   const draft = existing ? { ...existing } : {
     id: uid('rc_'), name: '', amount: '', kind: 'expense',
+    groupId: groupId || groups[0]?.id || null,
     categoryId: cats().find((c) => c.kind === 'expense')?.id || null,
     accountId: store.config.accounts[0]?.id || null,
     toAccountId: store.config.accounts[1]?.id || null,
@@ -1345,6 +1409,13 @@ function openRecurringSheet(existing) {
         'aria-pressed': draft.kind === k ? 'true' : 'false', text: n,
         onclick: () => { draft.kind = k; draw(); },
       }))),
+      groups.length > 1 ? el('div', { class: 'field' }, [
+        el('label', { text: '어느 묶음에' }),
+        el('div', { class: 'picker' }, groups.map((g) => el('button', {
+          'aria-pressed': (draft.groupId || groups[0]?.id) === g.id ? 'true' : 'false', text: g.name,
+          onclick: () => { draft.groupId = g.id; draw(); },
+        }))),
+      ]) : null,
       el('div', { class: 'field' }, [
         el('label', { for: 'rc-name', text: '이름' }),
         el('input', {
@@ -1396,7 +1467,10 @@ function openRecurringSheet(existing) {
     if (!draft.name.trim()) { toast('이름을 넣어 주세요'); return; }
     if (!draft.amount || Number(draft.amount) <= 0) { toast('금액을 넣어 주세요'); return; }
     if (draft.kind === 'transfer' && draft.accountId === draft.toAccountId) { toast('보내는 계좌와 받는 계좌가 같아요'); return; }
-    const item = { ...draft, name: draft.name.trim(), amount: Number(draft.amount) };
+    const item = {
+      ...draft, name: draft.name.trim(), amount: Number(draft.amount),
+      groupId: draft.groupId || groups[0]?.id || null,
+    };
     if (!existing) item.lastRun = backfill ? monthKey(addMonths(today(), -1)) : monthKey(today());
     const list = existing
       ? store.config.recurring.map((r) => (r.id === item.id ? item : r))
@@ -1445,6 +1519,19 @@ function viewSettings() {
       el('span', { class: 'hint', text: '둘이 돈을 모아 쓰는 통장을 고르면 대시보드에 분담과 잔액이 따로 보여요.' }),
     ]),
     el('div', { class: 'field' }, [
+      el('label', { text: '강조색' }),
+      el('div', { class: 'swatches' }, Object.entries(ACCENTS).map(([key, a]) => el('button', {
+        class: 'swatchbtn', type: 'button', title: a.name,
+        'aria-label': a.name, 'aria-pressed': (cfg.settings.accent || DEFAULT_ACCENT) === key ? 'true' : 'false',
+        style: `--sw:${a.light.base};--swd:${a.dark.base}`,
+        onclick: () => {
+          applyAccent(key);
+          store.saveConfig({ settings: { ...store.config.settings, accent: key } });
+        },
+      }, [el('span', { class: 'chip-name', text: a.name })]))),
+      el('span', { class: 'hint', text: '버튼과 선택 표시에 쓰이는 색이에요. 함께 쓰는 사람 모두에게 같은 색으로 보입니다.' }),
+    ]),
+    el('div', { class: 'field' }, [
       el('label', { text: '화면 테마' }),
       el('div', { class: 'picker' }, ['system', 'light', 'dark'].map((v) => el('button', {
         'aria-pressed': (localStorage.getItem('hab.theme') || 'system') === v ? 'true' : 'false',
@@ -1454,32 +1541,33 @@ function viewSettings() {
     ]),
   ]));
 
+  // 묶음마다 한 장씩. 공동 · 내 것 · 신부 것처럼 사람이나 성격별로 나눠 담는다.
+  const groups = store.config.recurringGroups || [];
   const rec = store.config.recurring || [];
-  out.push(card({
-    title: '매달 자동으로 적기',
-    sub: '월세·통신비 같은 고정지출은 물론, 급여와 통장 사이 이체도 됩니다 · 정해진 날이 지나면 알아서 적혀요',
-    actions: [el('button', { class: 'btn sm', text: '+ 추가', onclick: () => openRecurringSheet(null) })],
-  }, rec.length ? [sortableList('recurring', rec, (r) => el('div', { class: 'listline' }, [
+  for (const g of groups) out.push(recurringGroupCard(g, rec.filter((r) => (r.groupId || groups[0]?.id) === g.id)));
+  out.push(el('div', {}, [
     el('button', {
-      class: 'chip', 'aria-pressed': r.active ? 'true' : 'false',
-      text: r.active ? '켬' : '끔', title: '끄면 다음 달부터 적히지 않아요',
-      onclick: () => store.saveConfig({
-        recurring: store.config.recurring.map((x) => (x.id === r.id ? { ...x, active: !x.active } : x)),
-      }),
+      class: 'btn', text: '＋ 고정 내역 묶음 추가',
+      onclick: () => openSheet('새 묶음', [
+        el('p', { style: 'font-size:13px;color:var(--ink-2);margin:0 0 12px', text: '고정 내역을 사람이나 성격별로 나눠 담는 상자예요. 예: 내 고정지출, 신부 고정지출, 강아지.' }),
+        el('div', { class: 'field' }, [
+          el('label', { for: 'rg-name', text: '묶음 이름' }),
+          el('input', { id: 'rg-name', type: 'text', placeholder: '예: 내 고정지출' }),
+        ]),
+      ], [
+        el('button', {
+          class: 'btn primary', text: '만들기',
+          onclick: async () => {
+            const name = document.getElementById('rg-name').value.trim();
+            if (!name) { toast('묶음 이름을 넣어 주세요'); return; }
+            await store.saveConfig({ recurringGroups: [...groups, { id: uid('rg_'), name }] });
+            closeSheet();
+            toast('묶음을 만들었어요');
+          },
+        }),
+      ]),
     }),
-    el('button', {
-      class: 'btn sm ghost', style: 'flex:1;justify-content:flex-start;text-align:left',
-      text: `${r.name || '이름 없음'}`, onclick: () => openRecurringSheet(r),
-    }),
-    el('span', { class: 'tag', text: { expense: '지출', income: '수입', transfer: '이체' }[r.kind] || '지출' }),
-    el('span', { class: 'tag', text: `매월 ${r.day}일` }),
-    r.kind === 'transfer'
-      ? el('span', { class: 'tag', text: `${store.account(r.accountId)?.name || '?'} → ${store.account(r.toAccountId)?.name || '?'}` })
-      : null,
-    el('span', { class: 'spacer' }),
-    el('span', { class: 'num', style: `font-weight:600;color:var(--${r.kind === 'income' ? 'in' : r.kind === 'transfer' ? 'ink-3' : 'out'})`, text: won(r.amount) }),
-    el('button', { class: 'btn sm', text: '고치기', onclick: () => openRecurringSheet(r) }),
-  ]))] : [el('p', { class: 'empty', text: '월세·통신비처럼 매달 나가는 돈, 급여처럼 매달 들어오는 돈, 급여일에 생활비·강아지 통장으로 보내는 이체까지 넣어 두면 직접 적지 않아도 돼요.' })]));
+  ]));
 
   out.push(card({
     title: '분류와 예산',

@@ -29,8 +29,10 @@ function defaultConfig() {
       openingDate: opening,
       startPage: 'dashboard',
       sharedAccountId: 'a_living',
+      accent: 'green',
     },
-    // 매달 같은 날 자동으로 적히는 항목들
+    // 매달 같은 날 자동으로 적히는 항목들. 묶음으로 나눠 담는다(공동/개인 등).
+    recurringGroups: [{ id: 'rg_home', name: '공동' }],
     recurring: [],
     // 모으는 중인 목표들. config 에 있으니 계정(가계부)마다 남고 기기 사이에서 따라다닌다.
     goals: [],
@@ -849,6 +851,7 @@ function migrate(config) {
   return {
     settings: { ...base.settings, ...(config.settings || {}) },
     members: config.members?.length ? config.members : base.members,
+    recurringGroups: config.recurringGroups?.length ? config.recurringGroups : base.recurringGroups,
     recurring: config.recurring || [],
     goals: config.goals || [],
     accounts: config.accounts?.length ? config.accounts : base.accounts,

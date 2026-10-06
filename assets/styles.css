@@ -161,6 +161,14 @@ button { cursor: pointer; }
 .card-head { display: flex; align-items: baseline; gap: 4px 10px; margin-bottom: 9px; flex-wrap: wrap; }
 .card-head .btn { white-space: nowrap; }
 .card-head h2 { font-size: 14px; letter-spacing: .01em; }
+/* 카드 제목을 그 자리에서 고치는 입력칸 — 평소엔 제목처럼 보인다 */
+.titleinput {
+  font-size: 14px; font-weight: 600; letter-spacing: .01em; color: var(--ink);
+  border: 1px solid transparent; background: none; border-radius: 7px;
+  padding: 2px 6px; margin-left: -6px; width: 9em; min-width: 0;
+}
+.titleinput:hover { border-color: var(--line); background: var(--surface-2); }
+.titleinput:focus { border-color: var(--accent); background: var(--surface); outline: none; }
 .card-head .sub { font-size: 12px; color: var(--ink-3); }
 .card-head .spacer { flex: 1; min-width: 0; }
 
@@ -401,6 +409,22 @@ table.data td.n { font-family: var(--font-mono); font-variant-numeric: tabular-n
 }
 .emoji-btn:hover { border-color: var(--accent); }
 .emoji-btn[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+.swatchbtn {
+  display: inline-flex; align-items: center; gap: 7px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink-2);
+  border-radius: 999px; padding: 5px 12px 5px 8px; font-size: 12.5px;
+}
+.swatchbtn::before {
+  content: ''; width: 15px; height: 15px; border-radius: 50%;
+  background: var(--sw); border: 1px solid rgba(0, 0, 0, .12); flex: none;
+}
+.swatchbtn:hover { border-color: var(--ink-3); }
+.swatchbtn[aria-pressed="true"] { border-color: var(--ink); color: var(--ink); font-weight: 600; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .swatchbtn::before { background: var(--swd); border-color: rgba(255, 255, 255, .18); }
+}
+:root[data-theme="dark"] .swatchbtn::before { background: var(--swd); border-color: rgba(255, 255, 255, .18); }
 .emoji-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 6px; }
 .listline:last-child { border-bottom: 0; }
 @media (max-width: 900px) { .listline { flex-wrap: wrap; } }

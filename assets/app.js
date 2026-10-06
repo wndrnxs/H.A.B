@@ -5,6 +5,7 @@ import {
   ui, PAGES, bindRender, setUi, renderPage, openTxnSheet, applyTheme, toast,
 } from './views.js';
 import { el, today, periodLabel, shiftPeriod } from './util.js';
+import { applyAccent, rememberedAccent, DEFAULT_ACCENT } from './accent.js';
 
 const root = document.getElementById('app-root');
 
@@ -85,12 +86,18 @@ function render() {
 }
 
 bindRender(render);
-store.on(() => render());
+store.on(() => {
+  if (store.ready) applyAccent(store.config.settings.accent || DEFAULT_ACCENT);
+  render();
+});
 
 applyTheme(safeTheme());
+// 장부를 받기 전에도 색이 맞도록 지난번에 쓰던 색을 먼저 입힌다
+applyAccent(rememberedAccent());
 render();
 
 store.init().then(() => {
+  applyAccent(store.config.settings.accent || DEFAULT_ACCENT);
   render();
 }).catch((err) => {
   console.error(err);
