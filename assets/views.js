@@ -325,7 +325,7 @@ function viewDashboard() {
     ]),
   ));
 
-  out.push(pair(sharedAccountCard(), budgetCard()));
+  out.push(pair(goalsBriefCard(), budgetCard()));
   out.push(card({
     title: '최근 내역',
     actions: [el('button', { class: 'btn sm ghost', text: '전체 보기 →', onclick: () => setUi({ page: 'txns' }) })],
@@ -400,6 +400,41 @@ function sharedAccountCard() {
       ])
       : null,
   ]);
+}
+
+/** 대시보드에 올리는 목표 요약 — 가까운 목표 순으로 몇 개만 */
+function goalsBriefCard() {
+  const goals = (store.config.goals || []).map(readGoal)
+    .filter((g) => !g.done)
+    .sort((a, b) => (a.end || '').localeCompare(b.end || ''));
+  const go = el('button', { class: 'btn sm ghost', text: '목표 보기 →', onclick: () => setUi({ page: 'goals' }) });
+
+  if (!goals.length) {
+    return card({ title: '목표', sub: '모으는 중인 돈', actions: [go] }, [
+      el('p', { class: 'empty', style: 'padding:18px 10px', text: '신혼여행, 전세 보증금처럼 기한이 있는 목돈을 넣어 두면 매달 얼마씩 모아야 하는지 여기에 보여요.' }),
+      el('button', { class: 'btn primary', style: 'align-self:flex-start', text: '＋ 목표 만들기', onclick: () => setUi({ page: 'goals' }) }),
+    ]);
+  }
+
+  return card({
+    title: '목표',
+    sub: `${goals.length}개 · 매달 ${won(sum(goals, (g) => g.perMonth))}`,
+    actions: [go],
+  }, goals.slice(0, 4).map((g) => {
+    const dday = g.overdue ? `D+${Math.abs(g.parts.totalDays)}` : g.parts.totalDays === 0 ? 'D-DAY' : `D-${g.parts.totalDays}`;
+    const state = g.overdue ? 'crit' : g.ratio >= 0.8 ? 'good' : 'accent';
+    return el('button', { class: 'catrow goalrow', onclick: () => setUi({ page: 'goals' }) }, [
+      el('span', { class: 'name', text: `${g.emoji || '⚑'} ${g.name}` }),
+      el('span', { class: 'val num', text: `${won(g.perMonth)}/월` }),
+      el('span', { class: 'track' }, [
+        el('span', { class: 'fill', style: `width:${g.ratio * 100}%;background:var(--${state})` }),
+      ]),
+      el('span', { class: 'meta' }, [
+        el('span', { text: `${(g.ratio * 100).toFixed(0)}% · ${won(g.saved)} / ${won(g.target)}` }),
+        el('span', { style: `color:var(--${g.overdue ? 'crit' : 'ink-3'})`, text: `${dday} · ${g.targetDate}` }),
+      ]),
+    ]);
+  }));
 }
 
 /** 카드 둘을 같은 폭으로 나란히. 한쪽이 없으면 남은 하나가 통째로 쓴다. */
@@ -723,6 +758,33 @@ function loanCard() {
   ])));
 }
 
+/**
+ * 계좌에 남기는 메모.
+ * '전세보증금 2.2억 중 내 돈 1.2억 · 배우자 8천 · 다음 집 계약금 2천' 처럼
+ * 잔액 하나로는 설명되지 않는 것을 적어 둔다.
+ */
+function openAccountNoteSheet(account) {
+  const ta = el('textarea', {
+    rows: 5, id: 'acct-note', placeholder: '예: 내 돈 1억 2천 + 배우자 8천. 이 중 2천은 다음 집 계약금.',
+    style: 'width:100%;font-size:14px;line-height:1.6;resize:vertical',
+  }, [account.note || '']);
+  openSheet(`${account.name} 메모`, [
+    el('p', { style: 'font-size:13px;color:var(--ink-2);margin:0 0 10px', text: '이 계좌 잔액이 어떤 돈인지 적어 두세요. 자산 화면의 계좌 이름 아래에 보입니다.' }),
+    el('div', { class: 'field' }, [ta]),
+  ], [
+    el('button', {
+      class: 'btn primary', text: '저장',
+      onclick: async () => {
+        await store.saveConfig({
+          accounts: store.config.accounts.map((x) => (x.id === account.id ? { ...x, note: ta.value.trim() || null } : x)),
+        });
+        closeSheet();
+        toast(ta.value.trim() ? '메모를 남겼어요' : '메모를 지웠어요');
+      },
+    }),
+  ]);
+}
+
 /** 처음 빌린 금액만 받는 작은 시트 */
 function openPrincipalSheet(account) {
   let value = Number(account.principal) || null;
@@ -876,7 +938,7 @@ function viewAssets() {
         ]),
       ]),
     ]),
-    card({ title: '자산 흐름', sub: '매월 말 순자산', actions: [t.btn] }, [t.node]),
+    pair(card({ title: '자산 흐름', sub: '매월 말 순자산', actions: [t.btn] }, [t.node]), sharedAccountCard()),
     loanCard(),
     el('div', { class: 'split' }, [
       card({ title: '계좌별 잔액', actions: [el('button', { class: 'btn sm ghost', text: '계좌 관리', onclick: () => setUi({ page: 'settings' }) })] },
@@ -888,6 +950,7 @@ function viewAssets() {
               el('span', { class: 'ico', text: ACCOUNT_TYPES[a.type].emoji }),
               el('span', { class: 'body' }, [
                 el('span', { class: 'n' }, [a.name, a.offDashboard ? el('span', { class: 'tag', text: '숨김' }) : null]),
+                a.note ? el('span', { class: 'note', text: a.note }) : null,
               ]),
               el('span', { class: `b num ${v < 0 ? 'neg' : ''}`, text: won(v) }),
             ]);
@@ -991,6 +1054,7 @@ function hiddenCard(accounts, bal) {
       el('span', { class: 'body' }, [
         el('span', { class: 'n', text: a.name }),
         el('span', { class: 't', text: ACCOUNT_TYPES[a.type].label }),
+        a.note ? el('span', { class: 'note', text: a.note }) : null,
       ]),
       el('span', { class: `b num ${v < 0 ? 'neg' : ''}`, text: won(v) }),
     ]);
@@ -1472,6 +1536,11 @@ function viewSettings() {
       onCommit: (v) => patchList('accounts', i, {
         opening: ACCOUNT_TYPES[a.type]?.liability ? -Math.abs(v || 0) : Math.round(v || 0),
       }),
+    }),
+    el('button', {
+      class: 'btn sm', title: a.note || '이 계좌 잔액이 어떤 돈인지 적어 둡니다',
+      text: a.note ? '메모 ●' : '메모',
+      onclick: () => openAccountNoteSheet(a),
     }),
     el('button', {
       class: 'chip', 'aria-pressed': a.offDashboard ? 'false' : 'true',
