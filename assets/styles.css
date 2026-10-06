@@ -418,6 +418,14 @@ table.data td.n { font-family: var(--font-mono); font-variant-numeric: tabular-n
 }
 .emoji-btn:hover { border-color: var(--accent); }
 .emoji-btn[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+/* 고정 내역 묶음의 합계 — 작은 숫자 서넛을 한 줄에 */
+.sumstrip { display: flex; flex-wrap: wrap; gap: 5px 22px; margin: 0 0 11px; }
+.sumstrip .kv { min-width: 0; gap: 1px; }
+.sumstrip .kv .k { font-size: 11px; }
+.sumstrip .kv .v { font-size: 14.5px; }
+.sumstrip .kv.lead .v { font-size: 17px; }
+.sumstrip + .hint { display: block; margin: -5px 0 11px; }
+
 /* 강조색 고르기 — 색상환 + 자주 쓰는 색 몇 개 */
 .accentpick { display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: flex-start; }
 .wheelwrap {

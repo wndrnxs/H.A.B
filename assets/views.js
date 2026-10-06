@@ -1494,16 +1494,52 @@ function accentField() {
 }
 
 
+/** 묶음 하나가 매달 움직이는 돈. 꺼 둔 항목은 세지 않는다. */
+function recurringTotals(items) {
+  const on = items.filter((r) => r.active);
+  const by = (kind) => sum(on.filter((r) => r.kind === kind), (r) => r.amount);
+  const expense = by('expense');
+  const transfer = by('transfer');
+  const income = by('income');
+  // 이체는 통장만 바꾸는 돈이라 자산이 줄지 않지만, 통장에서 빠져나가는 건 같다.
+  return { expense, transfer, income, out: expense + transfer, count: on.length };
+}
+
+/** 합계 몇 개를 한 줄에 늘어놓는다 */
+function sumstrip(rows) {
+  return el('div', { class: 'sumstrip' }, rows.map(([k, v, tone, lead]) => el('div', { class: lead ? 'kv lead' : 'kv' }, [
+    el('span', { class: 'k', text: k }),
+    el('span', { class: 'v', style: tone ? `color:var(--${tone})` : null, text: won(v) }),
+  ])));
+}
+
+/** 묶음의 합계 줄. 수입은 들어오는 게 있을 때만 보여 준다. */
+function recurringStrip(t) {
+  return sumstrip([
+    ['총 고정지출', t.out, null, true],
+    ['총 지출', t.expense, 'out'],
+    ['총 이체', t.transfer, 'ink-3'],
+    ...(t.income ? [['총 수입', t.income, 'in']] : []),
+  ]);
+}
+
+const RECURRING_NOTE = '총 고정지출은 지출과 이체를 더한, 매달 통장에서 빠져나가는 돈이에요. 이체는 다른 통장으로 옮기는 것이라 자산이 줄지는 않아요.';
+
 /** 고정 내역 묶음 한 장. 제목을 그 자리에서 고칠 수 있다. */
-function recurringGroupCard(group, items) {
+function recurringGroupCard(group, items, showNote) {
   const groups = store.config.recurringGroups || [];
-  const monthly = sum(items.filter((r) => r.active && r.kind === 'expense'), (r) => r.amount);
+  const t = recurringTotals(items);
 
   const head = el('div', { class: 'card-head' }, [
     titleInput(group.name, '묶음 이름', (name) => store.saveConfig({
       recurringGroups: groups.map((x) => (x.id === group.id ? { ...x, name } : x)),
     })),
-    el('span', { class: 'sub', text: items.length ? `${items.length}건 · 매달 지출 ${won(monthly)}` : '아직 비어 있어요' }),
+    el('span', {
+      class: 'sub',
+      text: items.length
+        ? `${items.length}건${t.count < items.length ? ` · 켠 것 ${t.count}건` : ''}`
+        : '아직 비어 있어요',
+    }),
     el('span', { class: 'spacer' }),
     el('button', { class: 'btn sm', text: '+ 추가', onclick: () => openRecurringSheet(null, group.id) }),
     groups.length > 1 ? el('button', {
@@ -1549,7 +1585,11 @@ function recurringGroupCard(group, items) {
     ]))]
     : [el('p', { class: 'empty', text: '월세·통신비처럼 매달 나가는 돈, 급여처럼 들어오는 돈, 급여일에 다른 통장으로 보내는 이체를 넣어 두면 직접 적지 않아도 돼요.' })];
 
-  return el('section', { class: 'card' }, [head, ...rows]);
+  const totals = items.length
+    ? [recurringStrip(t), showNote && t.transfer ? el('span', { class: 'hint', text: RECURRING_NOTE }) : null]
+    : [];
+
+  return el('section', { class: 'card' }, [head, ...totals, ...rows]);
 }
 
 /** 매달 자동으로 적히는 항목 하나를 만들거나 고친다 */
@@ -1700,7 +1740,20 @@ function viewSettings() {
   // 묶음마다 한 장씩. 공동 · 내 것 · 신부 것처럼 사람이나 성격별로 나눠 담는다.
   const groups = store.config.recurringGroups || [];
   const rec = store.config.recurring || [];
-  for (const g of groups) out.push(recurringGroupCard(g, rec.filter((r) => (r.groupId || groups[0]?.id) === g.id)));
+  if (groups.length > 1 && rec.length) {
+    const all = recurringTotals(rec);
+    out.push(el('section', { class: 'card flat' }, [
+      el('div', { class: 'card-head' }, [
+        el('h2', { text: '고정 내역 전체' }),
+        el('span', { class: 'sub', text: `묶음 ${groups.length}개 · 켠 것 ${all.count}건` }),
+      ]),
+      recurringStrip(all),
+      el('span', { class: 'hint', text: RECURRING_NOTE }),
+    ]));
+  }
+  for (const g of groups) {
+    out.push(recurringGroupCard(g, rec.filter((r) => (r.groupId || groups[0]?.id) === g.id), groups.length === 1));
+  }
   out.push(el('div', {}, [
     el('button', {
       class: 'btn', text: '＋ 고정 내역 묶음 추가',
