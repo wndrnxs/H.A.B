@@ -1534,7 +1534,7 @@ const KIND_TONE = { expense: 'out', income: 'in', transfer: 'ink-3' };
  * 움직인 오늘이고, 원래 날이 와도 같은 건이 다시 적히지는 않는다.
  */
 async function applyRecurringNow(ids, where) {
-  const pending = await store.runRecurring({ early: true, ids, dryRun: true });
+  const { made: pending } = await store.runRecurring({ early: true, ids, dryRun: true });
   if (!pending.length) {
     toast(`${where ? `${where} ` : ''}이번 달 몫은 이미 다 적혀 있어요`);
     return;
@@ -1558,9 +1558,11 @@ async function applyRecurringNow(ids, where) {
   };
 
   go.onclick = async () => {
-    const made = await store.runRecurring({ early: true, ids: [...picked] });
+    const { made, failed } = await store.runRecurring({ early: true, ids: [...picked] });
     closeSheet();
-    toast(`${made.length}건을 오늘 날짜로 적었어요`);
+    // 못 적은 게 있으면 조용히 넘기지 않는다. 다시 누르면 남은 것만 다시 뜬다.
+    if (failed.length) toast(`${made.length}건을 적었어요 · ${failed.length}건은 저장이 안 됐어요. 잠시 뒤 다시 눌러 주세요`);
+    else toast(`${made.length}건을 오늘 날짜로 적었어요`);
   };
 
   openSheet('오늘 날짜로 당겨 적기', [
@@ -1758,7 +1760,7 @@ function openRecurringSheet(existing, groupId) {
       ? store.config.recurring.map((r) => (r.id === item.id ? item : r))
       : [...(store.config.recurring || []), item];
     await store.saveConfig({ recurring: list });
-    const made = await store.runRecurring();
+    const { made } = await store.runRecurring();
     closeSheet();
     toast(made.length ? `저장했어요 · ${made.length}건을 적었어요` : '저장했어요');
   };
@@ -2215,17 +2217,82 @@ function sortableList(key, items, renderRow) {
 }
 
 // 가계부에서 자주 쓰는 것들만 추렸다. 없는 건 직접 입력으로.
+// 새로 나온 아이콘(🧋 🪴 🪙 같은 2020년 이후 것)은 윈도우의 조금 오래된
+// 글꼴에 없어서 네모로 보인다. 웬만한 기기에 다 있는 것으로 골라 두고,
+// 그래도 없는 것은 아래 emojiShows 가 걸러 낸다.
 const EMOJI_GROUPS = [
-  ['먹는 것', ['🍚', '🍜', '🍕', '🍗', '🍣', '🥗', '🍱', '🍔', '🍰', '☕', '🧋', '🍺', '🍎', '🥕', '🛒', '🧊']],
-  ['집', ['🏠', '🏡', '🛋️', '🛏️', '🚿', '💡', '🔧', '🧻', '🧼', '🪴', '🧺', '🔑']],
+  ['먹는 것', ['🍚', '🍜', '🍕', '🍗', '🍣', '🥗', '🍱', '🍔', '🍰', '☕', '🥤', '🍺', '🍎', '🥕', '🛒', '🍻']],
+  ['집', ['🏠', '🏡', '🛋️', '🛏️', '🚿', '💡', '🔧', '🧹', '🌱', '👔', '🔌', '🔑']],
   ['이동', ['🚌', '🚇', '🚗', '🚕', '⛽', '✈️', '🚲', '🛵', '🅿️', '🛣️']],
   ['생활', ['📱', '💻', '📶', '👕', '👟', '👜', '💄', '✂️', '🎁', '📚', '🎮', '🎬', '🎤', '🏕️', '🏋️', '⚽']],
-  ['건강', ['💊', '🏥', '🦷', '👓', '🩺', '🧘']],
+  ['건강', ['💊', '🏥', '🦷', '👓', '💉', '🧘']],
   ['반려동물', ['🐶', '🐱', '🐾', '🦴', '🐕', '🧸']],
-  ['돈', ['💰', '💵', '💳', '🏦', '📈', '🛡️', '🧾', '💸', '🪙', '🐖', '💼', '🎫']],
+  ['돈', ['💰', '💵', '💳', '🏦', '📈', '🛡️', '🧾', '💸', '🏧', '🐖', '💼', '🎫']],
   ['행사', ['💒', '💍', '🎂', '💌', '🎓', '🧧', '🎄', '🎉']],
   ['그 밖', ['📦', '🏷️', '⭐', '❤️', '🔖', '🙂', '👶', '🌏']],
 ];
+
+/**
+ * 이 기기가 그릴 수 있는 아이콘인지 본다.
+ *
+ * 몰래 그려 보고 색이 들어갔는지 센다. 아이콘 글꼴에 있는 글자는 여러 색으로
+ * 그려지지만, 글꼴에 없는 글자는 빈 네모 하나로 그려진다. 일부러 빨강으로만
+ * 칠하게 해 두면, 빨강 말고 다른 색이 하나라도 있는지로 둘을 가를 수 있다.
+ * (U+FFFF 같은 없는 글자와 비교하는 방법도 있지만, 기기에 따라 그 글자가 아예
+ *  안 그려져서 재지 못한다.)
+ */
+const emojiShows = (() => {
+  const FONT = '20px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
+  const SIZE = 26;
+  const cache = new Map();
+  let test;   // undefined=아직 안 해 봄, null=이 기기에선 못 잼
+
+  const build = () => {
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = SIZE;
+      canvas.height = SIZE;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return null;
+      ctx.textBaseline = 'top';
+      ctx.font = FONT;
+      ctx.fillStyle = '#ff0000';
+      const colorful = (ch) => {
+        ctx.clearRect(0, 0, SIZE, SIZE);
+        ctx.fillText(ch, 1, 1);
+        const d = ctx.getImageData(0, 0, SIZE, SIZE).data;
+        for (let i = 0; i < d.length; i += 4) {
+          if (d[i + 3] < 24) continue;                      // 비친 데는 넘긴다
+          if (d[i + 1] > 40 || d[i + 2] > 40) return true;   // 빨강 아닌 색이 있다
+        }
+        return false;
+      };
+      // 이 기기가 아이콘을 색으로 그리는지부터 본다. 흑백으로만 그리는 기기라면
+      // 이 방법으로는 가릴 수 없으니 아예 재지 않는다.
+      return colorful('🍚') ? colorful : null;
+    } catch {
+      return null;
+    }
+  };
+
+  return (ch) => {
+    if (test === undefined) test = build();
+    if (!test) return true;   // 못 재면 전부 보여 준다. 괜히 다 지우는 것보단 낫다
+    if (!cache.has(ch)) cache.set(ch, test(ch));
+    return cache.get(ch);
+  };
+})();
+
+/** 글꼴에 없어 네모로 보일 것은 빼고 돌려준다 */
+function shownEmojiGroups() {
+  const kept = EMOJI_GROUPS
+    .map(([name, list]) => [name, list.filter(emojiShows)])
+    .filter(([, list]) => list.length);
+  const total = sum(EMOJI_GROUPS, ([, list]) => list.length);
+  const left = sum(kept, ([, list]) => list.length);
+  // 절반 넘게 걸러졌으면 재는 쪽이 잘못된 거다. 그럴 땐 원래대로 다 보여 준다.
+  return left * 2 < total ? EMOJI_GROUPS : kept;
+}
 
 /** 아이콘 고르기 — 목록에서 누르거나 직접 붙여넣는다 */
 function openEmojiSheet(current, onPick) {
@@ -2234,7 +2301,7 @@ function openEmojiSheet(current, onPick) {
     'aria-label': '직접 입력',
   });
   const body = [
-    ...EMOJI_GROUPS.flatMap(([name, list]) => [
+    ...shownEmojiGroups().flatMap(([name, list]) => [
       el('div', { class: 'eyebrow', style: 'margin:12px 0 6px', text: name }),
       el('div', { class: 'emoji-grid' }, list.map((emo) => el('button', {
         class: 'emoji-btn', type: 'button', text: emo,

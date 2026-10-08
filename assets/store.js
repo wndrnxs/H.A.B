@@ -698,21 +698,29 @@ class Store {
    * 원래 날이 와도 다시 적히지 않는다.
    * ids 를 주면 그 항목들만, dryRun 을 켜면 적지 않고 무엇이 적힐지만 돌려준다.
    *
-   * @returns {Array} 새로 적힌(또는 dryRun 이면 적힐) 거래들
+   * @returns {{made: Array, failed: Array}} 새로 적힌(dryRun 이면 적힐) 거래와, 적다가 실패한 거래
    */
   async runRecurring({ early = false, ids = null, dryRun = false } = {}) {
     const items = this.config.recurring || [];
-    if (!items.length) return [];
+    if (!items.length) return { made: [], failed: [] };
     const now = today();
     const thisMonth = monthKey(now);
+    const prevMonth = monthKey(addMonths(now, -1));
     const made = [];
+    const failed = [];
     const nextItems = items.map((r) => ({ ...r }));
 
     for (const r of nextItems) {
       if (!r.active || !r.amount) continue;
       if (ids && !ids.includes(r.id)) continue;
       // 최대 12개월치까지만 거슬러 만든다. 오래 안 열었다고 몇 년치가 쏟아지면 곤란하다
-      let cursor = r.lastRun || monthKey(addMonths(now, -1));
+      let cursor = r.lastRun || prevMonth;
+      // 당겨 적을 때는 '이번 달은 지나갔다' 는 표시를 한 번 무시하고 다시 본다.
+      // 만들 때 '이번 달 것부터 적기' 를 꺼 뒀거나 적힌 걸 지웠으면 표시만 앞서
+      // 있고 정작 내역이 없는데, 그걸 손으로도 못 적으면 달을 통째로 놓친다.
+      // 진짜 적힌 게 있으면 아래 id 검사에서 걸러지니 두 번 적히지 않는다.
+      if (early && cursor >= thisMonth) cursor = prevMonth;
+      let written = cursor;   // 실제로 적은 데까지. 실패한 달을 넘기면 안 된다.
       for (let guard = 0; guard < 12; guard += 1) {
         const month = monthKey(addMonths(`${cursor}-01`, 1));
         if (month > thisMonth) break;
@@ -726,7 +734,7 @@ class Store {
         }
         cursor = month;
         const id = `r_${r.id}_${month}`;
-        if (this.months[month]?.[id]) continue;   // 이미 있음(지운 것 포함)
+        if (this.months[month]?.[id]) { written = month; continue; }   // 이미 있음(지운 것 포함)
         const txn = {
           id,
           createdAt: Date.now(),
@@ -743,18 +751,27 @@ class Store {
           sample: false,
           updatedAt: Date.now(),
         };
-        made.push(txn);
-        if (dryRun) continue;
-        (this.months[month] ||= {})[id] = txn;
-        await this.writeMonth(month, { [id]: txn });
+        if (dryRun) { made.push(txn); written = month; continue; }
+        // 한 건이 실패해도 나머지는 적는다. 예전엔 여기서 통째로 멈춰서
+        // '일부만 적히고 왜 안 됐는지도 모르는' 상태가 됐다.
+        try {
+          (this.months[month] ||= {})[id] = txn;
+          await this.writeMonth(month, { [id]: txn });
+          made.push(txn);
+          written = month;
+        } catch (err) {
+          delete this.months[month][id];
+          failed.push(txn);
+          break;   // 이 항목은 여기서 멈추고, 다음 항목으로 넘어간다
+        }
       }
-      r.lastRun = cursor;
+      r.lastRun = written;
     }
 
     if (!dryRun && (made.length || JSON.stringify(nextItems) !== JSON.stringify(items))) {
       await this.saveConfig({ recurring: nextItems });
     }
-    return made;
+    return { made, failed };
   }
 
   // ---- 쓰기 ----

@@ -24,9 +24,10 @@
   --s5: #e87ba4; --s6: #008300; --s7: #4a3aa7; --s8: #e34948;
   --shadow: 0 1px 2px rgba(20, 35, 28, .06), 0 8px 24px -14px rgba(20, 35, 28, .28);
   --radius: 14px;
-  --font-body: 'IBM Plex Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', system-ui, sans-serif;
-  --font-display: 'Gowun Batang', 'Apple SD Gothic Neo', serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  --font-emoji: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'Segoe UI Symbol';
+  --font-body: 'IBM Plex Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', system-ui, var(--font-emoji), sans-serif;
+  --font-display: 'Gowun Batang', 'Apple SD Gothic Neo', var(--font-emoji), serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, var(--font-emoji), monospace;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -464,6 +465,8 @@ table.data td.n { font-family: var(--font-mono); font-variant-numeric: tabular-n
 }
 :root[data-theme="dark"] .swatchbtn::before { background: var(--swd); border-color: rgba(255, 255, 255, .18); }
 .emoji-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 6px; }
+/* 아이콘만 들어가는 칸은 아이콘 글꼴을 앞에 세운다 */
+.emoji-btn { font-family: var(--font-emoji), var(--font-body); }
 .listline:last-child { border-bottom: 0; }
 @media (max-width: 900px) { .listline { flex-wrap: wrap; } }
 .acct .n .tag { margin-left: 6px; }
