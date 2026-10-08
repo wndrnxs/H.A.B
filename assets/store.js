@@ -692,27 +692,38 @@ class Store {
    * 열어도 같은 id 로 쓰기 때문에 한 건으로 합쳐지고 두 번 적히지 않는다.
    * lastRun 은 어디까지 만들었는지 표시다. 사용자가 지운 내역을 다시 만들어
    * 내지 않으려면 이 표시가 필요하다.
+   *
+   * early 를 켜면 이번 달 날짜가 아직 안 왔어도 오늘 날짜로 적는다. 공휴일이
+   * 끼어 급여와 이체가 앞당겨진 달에 쓴다. id 는 그대로 `..._<YYYY-MM>` 이라
+   * 원래 날이 와도 다시 적히지 않는다.
+   * ids 를 주면 그 항목들만, dryRun 을 켜면 적지 않고 무엇이 적힐지만 돌려준다.
+   *
+   * @returns {Array} 새로 적힌(또는 dryRun 이면 적힐) 거래들
    */
-  async runRecurring() {
+  async runRecurring({ early = false, ids = null, dryRun = false } = {}) {
     const items = this.config.recurring || [];
-    if (!items.length) return 0;
+    if (!items.length) return [];
     const now = today();
     const thisMonth = monthKey(now);
-    let made = 0;
+    const made = [];
     const nextItems = items.map((r) => ({ ...r }));
 
     for (const r of nextItems) {
       if (!r.active || !r.amount) continue;
+      if (ids && !ids.includes(r.id)) continue;
       // 최대 12개월치까지만 거슬러 만든다. 오래 안 열었다고 몇 년치가 쏟아지면 곤란하다
       let cursor = r.lastRun || monthKey(addMonths(now, -1));
       for (let guard = 0; guard < 12; guard += 1) {
         const month = monthKey(addMonths(`${cursor}-01`, 1));
         if (month > thisMonth) break;
         const [y, m] = month.split('-').map(Number);
-        const date = `${month}-${pad(Math.min(r.day || 1, daysInMonth(y, m)))}`;
-        // 아직 그 날이 안 왔으면 표시를 옮기지 않는다.
-        // 옮겨 두면 날이 됐을 때 그 달을 통째로 건너뛴다.
-        if (date > now) break;
+        let date = `${month}-${pad(Math.min(r.day || 1, daysInMonth(y, m)))}`;
+        if (date > now) {
+          // 아직 그 날이 안 왔으면 표시를 옮기지 않는다.
+          // 옮겨 두면 날이 됐을 때 그 달을 통째로 건너뛴다.
+          if (!early) break;
+          date = now;   // 당겨 적는다. 실제로 돈이 움직인 날이 오늘이니까.
+        }
         cursor = month;
         const id = `r_${r.id}_${month}`;
         if (this.months[month]?.[id]) continue;   // 이미 있음(지운 것 포함)
@@ -732,16 +743,15 @@ class Store {
           sample: false,
           updatedAt: Date.now(),
         };
+        made.push(txn);
+        if (dryRun) continue;
         (this.months[month] ||= {})[id] = txn;
         await this.writeMonth(month, { [id]: txn });
-        made += 1;
       }
       r.lastRun = cursor;
     }
 
-    if (made) {
-      await this.saveConfig({ recurring: nextItems });
-    } else if (JSON.stringify(nextItems) !== JSON.stringify(items)) {
+    if (!dryRun && (made.length || JSON.stringify(nextItems) !== JSON.stringify(items))) {
       await this.saveConfig({ recurring: nextItems });
     }
     return made;

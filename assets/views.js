@@ -1525,6 +1525,75 @@ function recurringStrip(t) {
 
 const RECURRING_NOTE = '총 고정지출은 지출과 이체를 더한, 매달 통장에서 빠져나가는 돈이에요. 이체는 다른 통장으로 옮기는 것이라 자산이 줄지는 않아요.';
 
+const KIND_NAME = { expense: '지출', income: '수입', transfer: '이체' };
+const KIND_TONE = { expense: 'out', income: 'in', transfer: 'ink-3' };
+
+/**
+ * 날이 오기 전에 이번 달 고정 내역을 당겨 적는다.
+ * 공휴일이 끼어 급여와 이체가 앞당겨진 달에 쓴다. 적히는 날짜는 실제로 돈이
+ * 움직인 오늘이고, 원래 날이 와도 같은 건이 다시 적히지는 않는다.
+ */
+async function applyRecurringNow(ids, where) {
+  const pending = await store.runRecurring({ early: true, ids, dryRun: true });
+  if (!pending.length) {
+    toast(`${where ? `${where} ` : ''}이번 달 몫은 이미 다 적혀 있어요`);
+    return;
+  }
+  // 아직 안 나간 것도 섞여 있다(급여일은 당겨졌어도 월세는 25일 그대로일 수 있다).
+  // 그래서 전부 적지 않고, 오늘 실제로 움직인 것만 고르게 한다.
+  const picked = new Set(pending.map((t) => t.recurringId));
+  const totals = el('div', {});
+  const go = el('button', { class: 'btn primary' });
+
+  const sync = () => {
+    const on = pending.filter((t) => picked.has(t.recurringId));
+    const out = sum(on.filter((t) => t.kind !== 'income'), (t) => t.amount);
+    const income = sum(on.filter((t) => t.kind === 'income'), (t) => t.amount);
+    totals.replaceChildren(sumstrip([
+      ['나가는 돈', out, 'out', true],
+      ...(income ? [['들어오는 돈', income, 'in']] : []),
+    ]));
+    go.textContent = on.length ? `${on.length}건 적기` : '고른 것이 없어요';
+    go.disabled = !on.length;
+  };
+
+  go.onclick = async () => {
+    const made = await store.runRecurring({ early: true, ids: [...picked] });
+    closeSheet();
+    toast(`${made.length}건을 오늘 날짜로 적었어요`);
+  };
+
+  openSheet('오늘 날짜로 당겨 적기', [
+    el('p', {
+      style: 'font-size:13.5px;line-height:1.6;margin:0 0 12px;color:var(--ink-2)',
+      text: `오늘 실제로 돈이 움직인 것만 골라 주세요. 오늘(${prettyDate(today())}) 날짜로 적히고, `
+        + '원래 날이 와도 같은 건이 다시 적히지는 않아요. 고르지 않은 것은 원래 날이 되면 알아서 적혀요.',
+    }),
+    el('div', { class: 'preview' }, pending.map((t) => {
+      const src = (store.config.recurring || []).find((r) => r.id === t.recurringId);
+      return el('label', { class: 'listline pickline' }, [
+        el('input', {
+          type: 'checkbox',
+          checked: true,
+          onchange: (e) => {
+            if (e.target.checked) picked.add(t.recurringId); else picked.delete(t.recurringId);
+            sync();
+          },
+        }),
+        el('span', { class: 'tag', text: KIND_NAME[t.kind] || '지출' }),
+        el('span', { text: t.memo }),
+        el('span', { class: 'tag', text: `원래 ${src?.day || 1}일` }),
+        el('span', { class: 'spacer' }),
+        el('span', {
+          class: 'num', style: `font-weight:600;color:var(--${KIND_TONE[t.kind] || 'out'})`, text: won(t.amount),
+        }),
+      ]);
+    })),
+    totals,
+  ], [go]);
+  sync();
+}
+
 /** 고정 내역 묶음 한 장. 제목을 그 자리에서 고칠 수 있다. */
 function recurringGroupCard(group, items, showNote) {
   const groups = store.config.recurringGroups || [];
@@ -1542,6 +1611,11 @@ function recurringGroupCard(group, items, showNote) {
     }),
     el('span', { class: 'spacer' }),
     el('button', { class: 'btn sm', text: '+ 추가', onclick: () => openRecurringSheet(null, group.id) }),
+    items.length ? el('button', {
+      class: 'btn sm', text: '지금 적기',
+      title: '날이 오기 전에 이번 달 몫을 오늘 날짜로 적어요',
+      onclick: () => applyRecurringNow(items.map((r) => r.id), `'${group.name}'`),
+    }) : null,
     groups.length > 1 ? el('button', {
       class: 'btn sm danger', text: '묶음 삭제',
       onclick: () => confirmThen(
@@ -1686,7 +1760,7 @@ function openRecurringSheet(existing, groupId) {
     await store.saveConfig({ recurring: list });
     const made = await store.runRecurring();
     closeSheet();
-    toast(made ? `저장했어요 · ${made}건을 적었어요` : '저장했어요');
+    toast(made.length ? `저장했어요 · ${made.length}건을 적었어요` : '저장했어요');
   };
 
   openSheet(existing ? '반복 내역 고치기' : '매달 반복되는 내역 만들기', [body], [
@@ -1746,6 +1820,12 @@ function viewSettings() {
       el('div', { class: 'card-head' }, [
         el('h2', { text: '고정 내역 전체' }),
         el('span', { class: 'sub', text: `묶음 ${groups.length}개 · 켠 것 ${all.count}건` }),
+        el('span', { class: 'spacer' }),
+        el('button', {
+          class: 'btn sm', text: '이번 달 지금 적기',
+          title: '날이 오기 전에 모든 묶음의 이번 달 몫을 오늘 날짜로 적어요',
+          onclick: () => applyRecurringNow(null, ''),
+        }),
       ]),
       recurringStrip(all),
       el('span', { class: 'hint', text: RECURRING_NOTE }),

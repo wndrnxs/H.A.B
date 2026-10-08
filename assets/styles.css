@@ -418,6 +418,12 @@ table.data td.n { font-family: var(--font-mono); font-variant-numeric: tabular-n
 }
 .emoji-btn:hover { border-color: var(--accent); }
 .emoji-btn[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+/* '지금 적기' 에서 무엇을 적을지 골라 보는 목록 */
+.preview { max-height: 42vh; overflow: auto; margin: 0 0 4px; }
+.pickline { cursor: pointer; }
+.pickline input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent); flex: none; margin: 0; }
+.pickline:has(input:not(:checked)) { opacity: .45; }
+
 /* 고정 내역 묶음의 합계 — 작은 숫자 서넛을 한 줄에 */
 .sumstrip { display: flex; flex-wrap: wrap; gap: 5px 22px; margin: 0 0 11px; }
 .sumstrip .kv { min-width: 0; gap: 1px; }
