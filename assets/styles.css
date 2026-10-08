@@ -477,6 +477,11 @@ table.data td.n { font-family: var(--font-mono); font-variant-numeric: tabular-n
 @media (max-width: 900px) { .listline { flex-wrap: wrap; } }
 .acct .n .tag { margin-left: 6px; }
 .listline .spacer { flex: 1; }
+/* 금액칸 위의 작은 이름표. 값이 차면 placeholder 가 사라져 뭐가 뭔지 알 수 없다 */
+.fieldlet { display: flex; flex-direction: column; gap: 2px; flex: none; min-width: 0; }
+.fieldlet .flab { font-size: 10.5px; line-height: 1.2; color: var(--ink-3); padding-left: 3px; white-space: nowrap; }
+/* 이름표가 붙은 줄은 다른 칸도 아래쪽에 맞춰 둔다 */
+.listline:has(.fieldlet) { align-items: flex-end; }
 .listline input[type="text"], .listline input[type="number"] {
   background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; font-size: 13.5px;
 }

@@ -136,6 +136,17 @@ function moneyInput({ value, onCommit, label, placeholder, width, allowNegative 
   });
 }
 
+/**
+ * 금액칸 위에 작은 이름표를 붙인다.
+ * 값이 차면 placeholder 가 사라져서, 칸이 둘 이상이면 뭐가 뭔지 알 수 없다.
+ */
+function labeledMoney(name, hint, props) {
+  return el('div', { class: 'fieldlet' }, [
+    el('span', { class: 'flab', text: name, title: hint }),
+    moneyInput({ ...props, label: props.label || name }),
+  ]);
+}
+
 function catOf(t) {
   return store.category(t.categoryId);
 }
@@ -1940,8 +1951,8 @@ function viewSettings() {
       onchange: (e) => patchList('categories', i, { name: e.target.value.trim() || '이름 없음' }),
     }),
     el('span', { class: 'spacer' }),
-    c.kind === 'expense' ? moneyInput({
-      value: c.budget, placeholder: '월 예산', width: '130px', label: `${c.name} 월 예산`,
+    c.kind === 'expense' ? labeledMoney('월 예산', '비워 두면 예산 관리에서 빠져요', {
+      value: c.budget, width: '130px', label: `${c.name} 월 예산`,
       onCommit: (v) => patchList('categories', i, { budget: v === null ? null : Math.abs(v) }),
     }) : el('span', { class: 'tag', text: '수입' }),
     el('button', {
@@ -1968,20 +1979,25 @@ function viewSettings() {
     }, Object.entries(ACCOUNT_TYPES).map(([k, v]) => el('option', { value: k, text: `${v.emoji} ${v.label}`, selected: a.type === k }))),
     el('span', { class: 'spacer' }),
     // 대출·카드는 '얼마를 빚졌나'를 양수로 받아 적는다. 내부에서는 음수로 저장된다.
-    moneyInput({
-      value: ACCOUNT_TYPES[a.type]?.liability ? -(a.opening || 0) : a.opening || 0,
-      width: '140px', allowNegative: !ACCOUNT_TYPES[a.type]?.liability,
-      label: ACCOUNT_TYPES[a.type]?.liability ? `${a.name} 남은 빚` : `${a.name} 시작 잔액`,
-      placeholder: ACCOUNT_TYPES[a.type]?.liability ? '남은 빚' : '시작 잔액',
-      onCommit: (v) => patchList('accounts', i, {
-        opening: ACCOUNT_TYPES[a.type]?.liability ? -Math.abs(v || 0) : Math.round(v || 0),
-      }),
-    }),
+    labeledMoney(
+      ACCOUNT_TYPES[a.type]?.liability ? '남은 빚' : '시작 잔액',
+      ACCOUNT_TYPES[a.type]?.liability
+        ? '지금 갚아야 할 돈을 양수로 적어요'
+        : '장부를 시작한 날의 잔액이에요',
+      {
+        value: ACCOUNT_TYPES[a.type]?.liability ? -(a.opening || 0) : a.opening || 0,
+        width: '140px', allowNegative: !ACCOUNT_TYPES[a.type]?.liability,
+        label: ACCOUNT_TYPES[a.type]?.liability ? `${a.name} 남은 빚` : `${a.name} 시작 잔액`,
+        onCommit: (v) => patchList('accounts', i, {
+          opening: ACCOUNT_TYPES[a.type]?.liability ? -Math.abs(v || 0) : Math.round(v || 0),
+        }),
+      },
+    ),
     // 대출은 '지금 남은 빚' 과 '처음 빌린 금액' 이 둘 다 있어야 얼마나 갚았는지 나온다.
     // 처음엔 대시보드에서만 넣을 수 있어서, 이미 일부 갚은 대출을 적다가 막혔다.
-    a.type === 'loan' ? moneyInput({
+    a.type === 'loan' ? labeledMoney('처음 빌린 금액', '대출을 받았을 때의 금액이에요. 얼마나 갚았는지 세는 데 씁니다.', {
       value: a.principal || null, width: '150px',
-      label: `${a.name} 처음 빌린 금액`, placeholder: '처음 빌린 금액',
+      label: `${a.name} 처음 빌린 금액`,
       onCommit: (v) => patchList('accounts', i, { principal: Math.abs(v || 0) || null }),
     }) : null,
     // 점은 늘 자리를 잡고 있고 보이기만 켜고 끈다. 글자가 늘면 그 줄만 너비가 달라진다.
