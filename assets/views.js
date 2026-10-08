@@ -740,7 +740,11 @@ function loanCard() {
           style: 'color:var(--good);font-weight:600',
           text: `${(r.ratio * 100).toFixed(r.ratio > 0 && r.ratio < 0.1 ? 1 : 0)}% 갚음`,
         }),
-        el('span', { text: `처음 ${wonShort(r.principal)} · 갚은 원금 ${wonShort(r.repaid)}` }),
+        el('button', {
+          class: 'linklike', title: '처음 빌린 금액 고치기',
+          text: `처음 ${wonShort(r.principal)}`, onclick: () => openPrincipalSheet(r.a),
+        }),
+        el('span', { text: `갚은 원금 ${wonShort(r.repaid)}` }),
         r.interest ? el('span', { text: `낸 이자 ${wonShort(r.interest)}` }) : null,
       ]
       : [
@@ -827,16 +831,41 @@ function openRepaySheet(preset) {
     date: today(),
     total: '',
     interest: '',
+    left: '',
+    // 'interest' = 이자를 직접 적는다. 'left' = 상환 뒤 남은 빚을 적으면 이자를 거꾸로 센다.
+    mode: 'left',
   };
   const body = el('div', {});
 
+  /** 지금 장부에 적힌 이 대출의 남은 빚 */
+  const nowLeft = () => Math.max(0, -(store.balances()[draft.loanId] || 0));
+
+  /**
+   * 낸 돈 한 번을 원금과 이자로 가른다.
+   * 이자를 직접 알면 그걸 빼면 되고, 모르면 '남은 빚이 얼마가 됐는지' 로 가른다.
+   * 줄어든 빚이 곧 원금이고, 나머지가 이자다. 상환 안내에는 이자보다
+   * '상환 후 대출잔액' 이 늘 적혀 있어서 이쪽이 옮겨 적기 쉽다.
+   */
+  const split = () => {
+    const total = Number(draft.total) || 0;
+    if (draft.mode === 'left') {
+      const before = nowLeft();
+      const after = draft.left === '' ? null : Math.max(0, Number(draft.left) || 0);
+      const principal = after === null ? 0 : Math.max(0, before - after);
+      return { total, principal, interest: Math.max(0, total - principal), before, after };
+    }
+    const interest = Number(draft.interest) || 0;
+    const principal = Math.max(0, total - interest);
+    return { total, principal, interest, before: nowLeft(), after: nowLeft() - principal };
+  };
+
   const draw = () => {
-    const principalPart = Math.max(0, (Number(draft.total) || 0) - (Number(draft.interest) || 0));
+    const v = split();
     body.replaceChildren(
       el('div', { class: 'row2' }, [
         el('div', { class: 'field' }, [
           el('label', { for: 'rp-loan', text: '어느 대출' }),
-          el('select', { id: 'rp-loan', onchange: (e) => { draft.loanId = e.target.value; } },
+          el('select', { id: 'rp-loan', onchange: (e) => { draft.loanId = e.target.value; draw(); } },
             loans.map((a) => el('option', { value: a.id, text: a.name, selected: draft.loanId === a.id }))),
         ]),
         el('div', { class: 'field' }, [
@@ -854,14 +883,37 @@ function openRepaySheet(preset) {
         moneyInput({ value: draft.total === '' ? null : draft.total, placeholder: '0', label: '총 납입액', onCommit: (v) => { draft.total = v ?? ''; draw(); } }),
       ]),
       el('div', { class: 'field' }, [
-        el('label', { text: '그중 이자' }),
-        moneyInput({ value: draft.interest === '' ? null : draft.interest, placeholder: '0', label: '이자', onCommit: (v) => { draft.interest = v ?? ''; draw(); } }),
-        el('span', { class: 'hint', text: '은행 앱이나 상환 안내에 이자와 원금이 나뉘어 적혀 있어요.' }),
+        el('label', { text: '이자는 어떻게 가를까요' }),
+        el('div', { class: 'picker' }, [
+          ['left', '남은 빚으로 계산'], ['interest', '이자를 직접 입력'],
+        ].map(([k, n]) => el('button', {
+          'aria-pressed': draft.mode === k ? 'true' : 'false', text: n,
+          onclick: () => { draft.mode = k; draw(); },
+        }))),
       ]),
+      draft.mode === 'left'
+        ? el('div', { class: 'field amount' }, [
+          el('label', { text: '갚고 난 뒤 남은 빚 (원)' }),
+          moneyInput({
+            value: draft.left === '' ? null : draft.left, placeholder: '0', label: '갚고 난 뒤 남은 빚',
+            onCommit: (x) => { draft.left = x ?? ''; draw(); },
+          }),
+          el('span', { class: 'hint', text: `상환 안내의 「상환 후 대출잔액」을 그대로 적으면 이자는 알아서 계산돼요. 지금 적힌 남은 빚은 ${won(v.before)}이에요.` }),
+        ])
+        : el('div', { class: 'field amount' }, [
+          el('label', { text: '그중 이자 (원)' }),
+          moneyInput({
+            value: draft.interest === '' ? null : draft.interest, placeholder: '0', label: '이자',
+            onCommit: (x) => { draft.interest = x ?? ''; draw(); },
+          }),
+          el('span', { class: 'hint', text: '은행 앱이나 상환 안내에 이자와 원금이 나뉘어 적혀 있어요.' }),
+        ]),
       el('div', { class: 'banner', style: 'margin-top:4px' }, [
         el('span', {}, [
-          '원금 ', el('b', { class: 'num', text: won(principalPart) }), ' 이 빚에서 줄고, 이자 ',
-          el('b', { class: 'num', text: won(Number(draft.interest) || 0) }), ' 만 지출로 잡혀요.',
+          '원금 ', el('b', { class: 'num', text: won(v.principal) }), ' 이 빚에서 줄고, 이자 ',
+          el('b', { class: 'num', text: won(v.interest) }), ' 만 지출로 잡혀요. 남은 빚 ',
+          el('b', { class: 'num', text: won(v.before) }), ' → ',
+          el('b', { class: 'num', text: won(Math.max(0, v.before - v.principal)) }),
         ]),
       ]),
     );
@@ -872,13 +924,18 @@ function openRepaySheet(preset) {
     el('button', {
       class: 'btn primary', text: '저장',
       onclick: async () => {
-        const total = Number(draft.total) || 0;
-        const interest = Number(draft.interest) || 0;
+        const { total, principal: principalPart, interest, before, after } = split();
         if (total <= 0) { toast('이번 달 낸 총액을 넣어 주세요'); return; }
-        if (interest > total) { toast('이자가 총액보다 클 수는 없어요'); return; }
         if (!draft.loanId || !draft.accountId) { toast('대출과 출금 계좌를 골라 주세요'); return; }
+        if (draft.mode === 'left') {
+          if (after === null) { toast('갚고 난 뒤 남은 빚을 넣어 주세요'); return; }
+          if (after > before) { toast('갚았는데 남은 빚이 늘 수는 없어요'); return; }
+          if (principalPart > total) {
+            toast('줄어든 빚이 낸 돈보다 많아요. 설정에서 남은 빚이 맞는지 확인해 주세요');
+            return;
+          }
+        } else if (interest > total) { toast('이자가 총액보다 클 수는 없어요'); return; }
         const loan = store.account(draft.loanId);
-        const principalPart = total - interest;
         if (interest > 0) {
           await store.saveTxn({
             kind: 'expense', date: draft.date, amount: interest,
@@ -1896,7 +1953,7 @@ function viewSettings() {
 
   out.push(card({
     title: '계좌와 결제수단',
-    sub: '끌어서 순서를 바꿉니다 · 대출·카드는 남은 빚을 양수로 · 숫자에서 빼고 싶은 계좌는 “장부에 표시”를 꺼요',
+    sub: '끌어서 순서를 바꿉니다 · 대출·카드는 지금 남은 빚을 양수로 (대출은 처음 빌린 금액도) · 숫자에서 빼고 싶은 계좌는 “장부에 표시”를 꺼요',
     actions: [el('button', {
       class: 'btn sm', text: '+ 계좌',
       onclick: () => store.saveConfig({ accounts: [...cfg.accounts, { id: uid('a_'), name: '새 계좌', type: 'bank', opening: 0 }] }),
@@ -1920,6 +1977,13 @@ function viewSettings() {
         opening: ACCOUNT_TYPES[a.type]?.liability ? -Math.abs(v || 0) : Math.round(v || 0),
       }),
     }),
+    // 대출은 '지금 남은 빚' 과 '처음 빌린 금액' 이 둘 다 있어야 얼마나 갚았는지 나온다.
+    // 처음엔 대시보드에서만 넣을 수 있어서, 이미 일부 갚은 대출을 적다가 막혔다.
+    a.type === 'loan' ? moneyInput({
+      value: a.principal || null, width: '150px',
+      label: `${a.name} 처음 빌린 금액`, placeholder: '처음 빌린 금액',
+      onCommit: (v) => patchList('accounts', i, { principal: Math.abs(v || 0) || null }),
+    }) : null,
     // 점은 늘 자리를 잡고 있고 보이기만 켜고 끈다. 글자가 늘면 그 줄만 너비가 달라진다.
     el('button', {
       class: `btn sm notebtn ${a.note ? 'has' : ''}`,
