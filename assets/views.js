@@ -297,9 +297,17 @@ function viewDashboard() {
   // 지출이 아니라 '자산 쪽으로 옮긴 돈'. 적금·투자 입금과 대출 원금상환이 여기 든다.
   // 카드대금은 뺀다 — 그 돈은 이미 쓴 시점에 지출로 한 번 세었다.
   const buildKinds = new Set(['savings', 'invest', 'deposit', 'loan']);
-  const built = list.filter((x) => x.kind === 'transfer' && buildKinds.has(store.account(x.toAccountId)?.type));
+  const transfers = list.filter((x) => x.kind === 'transfer');
+  const built = transfers.filter((x) => buildKinds.has(store.account(x.toAccountId)?.type));
   const toSavings = sum(built.filter((x) => store.account(x.toAccountId).type !== 'loan'), (x) => x.amount);
   const toLoans = sum(built.filter((x) => store.account(x.toAccountId).type === 'loan'), (x) => x.amount);
+  // 생활비 통장에서 강아지 통장으로 보내는 것처럼, 통장끼리만 오간 돈.
+  // 지출도 아니고 자산이 늘어난 것도 아니라 어느 숫자에도 안 잡혀서,
+  // 통장 잔액만 줄고 대시보드는 그대로인 것처럼 보였다. 따로 적어 둔다.
+  const moved = sum(
+    transfers.filter((x) => !built.includes(x) && store.account(x.toAccountId)?.type !== 'card'),
+    (x) => x.amount,
+  );
 
   heroCard.append(el('div', { class: 'tiles' }, [
     tile('순자산', won(nw.net), nw.hidden.length ? `${nw.hidden.join(' · ')} 제외` : '자산 − 부채'),
@@ -310,6 +318,7 @@ function viewDashboard() {
       toSavings + toLoans
         ? [toSavings ? `적금·투자 ${wonShort(toSavings)}` : null, toLoans ? `대출 원금 ${wonShort(toLoans)}` : null].filter(Boolean).join(' · ')
         : '적금·투자 입금과 대출 원금상환'),
+    tile('통장끼리 옮긴 돈', won(moved), '쓴 돈이 아니라 자리만 바뀐 돈'),
   ]));
   out.push(heroCard);
 
@@ -467,7 +476,9 @@ function tile(k, v, d) {
 function budgetCard() {
   const mFrom = startOfMonth(ui.anchor);
   const mTo = endOfMonth(ui.anchor);
-  const list = store.inRange(mFrom, mTo).filter((t) => t.kind === 'expense');
+  const all = store.inRange(mFrom, mTo);
+  const list = all.filter((t) => t.kind === 'expense');
+  const moved = sum(all.filter((t) => t.kind === 'transfer'), (t) => t.amount);
   const byCat = new Map();
   for (const t of list) byCat.set(t.categoryId, (byCat.get(t.categoryId) || 0) + t.amount);
   const cats = store.config.categories
@@ -478,11 +489,22 @@ function budgetCard() {
   const totalBudget = sum(store.config.categories.filter((c) => c.kind === 'expense' && c.budget), (c) => c.budget);
   const totalUsed = sum(list, (t) => t.amount);
 
+  // 이체는 예산에 넣지 않는다. 통장만 바꾼 돈이라 아직 쓴 게 아니고, 옮긴 자리에서
+  // 실제로 쓸 때 분류와 함께 한 번 더 세면 같은 돈을 두 번 세게 된다.
+  // 다만 통장 잔액은 줄어서 '왜 예산이 그대로지' 싶어지니, 여기서 밝혀 둔다.
+  const note = moved
+    ? el('p', {
+      class: 'hint', style: 'margin:10px 0 0',
+      text: `이번 달 이체로 옮긴 ${won(moved)}은 예산에 안 들어가요. 통장만 바뀌었을 뿐 아직 쓴 돈이 아니라서, `
+        + '옮겨 간 통장에서 실제로 쓸 때 그 분류의 예산에 잡혀요.',
+    })
+    : null;
+
   return card({
     title: '이번 달 예산',
     sub: `${Number(mFrom.slice(5, 7))}월 · ${won(totalUsed)} / ${won(totalBudget)}`,
     actions: [el('button', { class: 'btn sm ghost', text: '예산 고치기', onclick: () => setUi({ page: 'settings' }) })],
-  }, cats.length ? cats.map((c) => {
+  }, [...(cats.length ? cats.map((c) => {
     const ratio = c.used / c.budget;
     const state = ratio >= 1 ? 'crit' : ratio >= 0.8 ? 'warn' : 'good';
     const mark = { good: '○', warn: '△', crit: '●' }[state];
@@ -496,7 +518,7 @@ function budgetCard() {
         el('span', { text: ratio >= 1 ? `${won(c.used - c.budget)} 넘김` : `${won(c.budget - c.used)} 남음` }),
       ]),
     ]);
-  }) : [el('p', { class: 'empty', text: '설정에서 분류별 예산을 정하면 여기에 진행 상황이 보여요.' })]);
+  }) : [el('p', { class: 'empty', text: '설정에서 분류별 예산을 정하면 여기에 진행 상황이 보여요.' })]), note]);
 }
 
 // ── 내역 ─────────────────────────────────────────────────────────────────

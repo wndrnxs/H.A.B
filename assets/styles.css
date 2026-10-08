@@ -25,9 +25,9 @@
   --shadow: 0 1px 2px rgba(20, 35, 28, .06), 0 8px 24px -14px rgba(20, 35, 28, .28);
   --radius: 14px;
   --font-emoji: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'Segoe UI Symbol';
-  --font-body: 'IBM Plex Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', system-ui, var(--font-emoji), sans-serif;
-  --font-display: 'Gowun Batang', 'Apple SD Gothic Neo', var(--font-emoji), serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, var(--font-emoji), monospace;
+  --font-body: 'IBM Plex Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', system-ui, sans-serif, var(--font-emoji);
+  --font-display: 'Gowun Batang', 'Apple SD Gothic Neo', serif, var(--font-emoji);
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace, var(--font-emoji);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -211,7 +211,7 @@ button { cursor: pointer; }
 .v.in { color: var(--in); }
 .v.out { color: var(--out); }
 
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(134px, 1fr)); gap: 10px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); gap: 10px; }
 /* 히어로와 같은 카드 안에 들어올 때는 줄 하나로 잇는다 */
 .hero + .tiles { margin-top: 13px; padding-top: 13px; border-top: 1px solid var(--line); gap: 12px 20px; }
 .hero + .tiles .tile { border: 0; padding: 0; background: none; }
