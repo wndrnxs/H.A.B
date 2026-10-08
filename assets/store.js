@@ -685,78 +685,25 @@ class Store {
 
   // ---- 고정 내역 자동 등록 ----
 
-  /**
-   * 고정 내역 한 줄이 그 달에 만들어 낼 거래들.
-   *
-   * 보통은 한 건이지만 대출 상환은 두 건이다. 통장에서 한 번 빠져나가도
-   * 그 안에는 이자와 원금이 섞여 있고, 이자만 지출이고 원금은 빚이 줄어드는
-   * 이체라서 따로 적어야 '갚는 중인 대출' 과 '이번 달 지출' 이 둘 다 맞는다.
-   *
-   * 이자는 그날 남은 빚에 연이율을 곱해 센다. 매달 같은 금액을 내는
-   * 원리금균등상환이면 빚이 줄수록 이자도 줄고 원금이 늘어나는데, 이렇게
-   * 세면 그 흐름이 저절로 맞는다. 이율을 비워 두면 전부 원금으로 본다.
-   */
+  /** 고정 내역 한 줄이 그 달에 만들어 낼 거래 */
   buildRecurring(r, month, date) {
-    const base = `r_${r.id}_${month}`;
-    const amount = Math.abs(Math.round(r.amount));
     const stamp = Date.now();
-    const common = { createdAt: stamp, updatedAt: stamp, date, memberId: null, sample: false, recurringId: r.id };
-
-    if (r.kind !== 'loan') {
-      return [{
-        ...common,
-        id: base,
-        kind: r.kind || 'expense',
-        amount,
-        categoryId: r.kind === 'transfer' ? null : r.categoryId || null,
-        accountId: r.accountId || null,
-        toAccountId: r.kind === 'transfer' ? r.toAccountId || null : null,
-        loanId: null,
-        memo: r.name || '고정 내역',
-      }];
-    }
-
-    const left = Math.max(0, -(this.balances(date)[r.loanId] || 0));
-    const rate = Math.max(0, Number(r.rate) || 0);
-    const interest = Math.min(Math.round((left * rate) / 1200), amount);
-    const principal = Math.min(Math.max(0, amount - interest), left);
-    const name = r.name || '대출 상환';
-    const out = [];
-    if (interest > 0) {
-      out.push({
-        ...common,
-        id: `${base}_i`,
-        kind: 'expense',
-        amount: interest,
-        categoryId: r.categoryId || null,
-        accountId: r.accountId || null,
-        toAccountId: null,
-        loanId: r.loanId || null,
-        memo: `${name} 이자`,
-      });
-    }
-    if (principal > 0) {
-      out.push({
-        ...common,
-        id: `${base}_p`,
-        kind: 'transfer',
-        amount: principal,
-        categoryId: null,
-        accountId: r.accountId || null,
-        toAccountId: r.loanId || null,
-        loanId: null,
-        memo: `${name} 원금`,
-      });
-    }
-    return out;
-  }
-
-  /** 이 달에 이 항목이 이미 적혔나 (대출 상환은 id 가 둘로 갈린다) */
-  recurringDone(month, rid) {
-    const m = this.months[month];
-    if (!m) return false;
-    const base = `r_${rid}_${month}`;
-    return Object.keys(m).some((k) => k === base || k.startsWith(`${base}_`));
+    return {
+      id: `r_${r.id}_${month}`,
+      createdAt: stamp,
+      updatedAt: stamp,
+      date,
+      kind: r.kind || 'expense',
+      amount: Math.abs(Math.round(r.amount)),
+      categoryId: r.kind === 'transfer' ? null : r.categoryId || null,
+      accountId: r.accountId || null,
+      toAccountId: r.kind === 'transfer' ? r.toAccountId || null : null,
+      memberId: null,
+      loanId: null,
+      memo: r.name || '고정 내역',
+      recurringId: r.id,
+      sample: false,
+    };
   }
 
   /**
@@ -807,21 +754,19 @@ class Store {
           date = now;   // 당겨 적는다. 실제로 돈이 움직인 날이 오늘이니까.
         }
         cursor = month;
-        if (this.recurringDone(month, r.id)) { written = month; continue; }   // 이미 있음(지운 것 포함)
-        // 다 갚은 대출처럼 적을 게 없는 달도 있다. 그래도 지나간 달로는 친다.
-        const built = this.buildRecurring(r, month, date);
-        if (!built.length || dryRun) { made.push(...built); written = month; continue; }
+        const txn = this.buildRecurring(r, month, date);
+        if (this.months[month]?.[txn.id]) { written = month; continue; }   // 이미 있음(지운 것 포함)
+        if (dryRun) { made.push(txn); written = month; continue; }
         // 한 건이 실패해도 나머지는 적는다. 예전엔 여기서 통째로 멈춰서
         // '일부만 적히고 왜 안 됐는지도 모르는' 상태가 됐다.
         try {
-          this.months[month] ||= {};
-          for (const t of built) this.months[month][t.id] = t;
-          await this.writeMonth(month, Object.fromEntries(built.map((t) => [t.id, t])));
-          made.push(...built);
+          (this.months[month] ||= {})[txn.id] = txn;
+          await this.writeMonth(month, { [txn.id]: txn });
+          made.push(txn);
           written = month;
         } catch (err) {
-          for (const t of built) delete this.months[month][t.id];
-          failed.push(...built);
+          delete this.months[month][txn.id];
+          failed.push(txn);
           break;   // 이 항목은 여기서 멈추고, 다음 항목으로 넘어간다
         }
       }
@@ -940,7 +885,9 @@ function migrate(config) {
     settings: { ...base.settings, ...(config.settings || {}) },
     members: config.members?.length ? config.members : base.members,
     recurringGroups: config.recurringGroups?.length ? config.recurringGroups : base.recurringGroups,
-    recurring: config.recurring || [],
+    // '대출 상환' 종류는 걷어냈다. 그걸로 저장해 둔 줄이 남아 있으면 지출로 돌린다.
+    recurring: (config.recurring || []).map((r) => (
+      r.kind === 'loan' ? { ...r, kind: 'expense', loanId: null, rate: null } : r)),
     goals: config.goals || [],
     accounts: config.accounts?.length ? config.accounts : base.accounts,
     categories: config.categories?.length ? config.categories : base.categories,

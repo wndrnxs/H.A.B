@@ -737,7 +737,7 @@ function loanCard() {
 
   return card({
     title: '갚는 중인 대출',
-    sub: `남은 빚 ${won(totalLeft)} · 설정의 고정 내역에 「대출 상환」으로 넣어 두면 매달 알아서 적혀요`,
+    sub: `남은 빚 ${won(totalLeft)}`,
   }, rows.map((r) => el('div', { class: 'catrow' }, [
     el('span', { class: 'name', text: `${ACCOUNT_TYPES[r.a.type].emoji} ${r.a.name}` }),
     el('span', { class: 'val num', text: won(r.remaining) }),
@@ -1207,7 +1207,6 @@ function openGoalSheet(existing) {
           : el('span', { text: preview.overdue ? '목표일이 오늘보다 앞서 있어요.' : '목표 금액을 넣으면 매달 얼마씩 모아야 하는지 계산해 드려요.' }),
       ]),
     );
-    if (draft.kind === 'loan') syncLoanBanner();
   };
   draw();
 
@@ -1426,11 +1425,8 @@ function recurringTotals(items) {
   const expense = by('expense');
   const transfer = by('transfer');
   const income = by('income');
-  // 대출 상환은 이자(지출)와 원금(이체)이 섞여 있어 미리 가를 수 없다.
-  // 통장에서 빠져나가는 총액으로만 센다.
-  const loan = by('loan');
   // 이체는 통장만 바꾸는 돈이라 자산이 줄지 않지만, 통장에서 빠져나가는 건 같다.
-  return { expense, transfer, income, loan, out: expense + transfer + loan, count: on.length };
+  return { expense, transfer, income, out: expense + transfer, count: on.length };
 }
 
 /** 합계 몇 개를 한 줄에 늘어놓는다 */
@@ -1447,15 +1443,14 @@ function recurringStrip(t) {
     ['총 고정지출', t.out, null, true],
     ['총 지출', t.expense, 'out'],
     ['총 이체', t.transfer, 'ink-3'],
-    ...(t.loan ? [['대출 상환', t.loan, 'out']] : []),
     ...(t.income ? [['총 수입', t.income, 'in']] : []),
   ]);
 }
 
 const RECURRING_NOTE = '총 고정지출은 지출과 이체를 더한, 매달 통장에서 빠져나가는 돈이에요. 이체는 다른 통장으로 옮기는 것이라 자산이 줄지는 않아요.';
 
-const KIND_NAME = { expense: '지출', income: '수입', transfer: '이체', loan: '대출 상환' };
-const KIND_TONE = { expense: 'out', income: 'in', transfer: 'ink-3', loan: 'out' };
+const KIND_NAME = { expense: '지출', income: '수입', transfer: '이체' };
+const KIND_TONE = { expense: 'out', income: 'in', transfer: 'ink-3' };
 
 /**
  * 날이 오기 전에 이번 달 고정 내역을 당겨 적는다.
@@ -1468,26 +1463,16 @@ async function applyRecurringNow(ids, where) {
     toast(`${where ? `${where} ` : ''}이번 달 몫은 이미 다 적혀 있어요`);
     return;
   }
-  // 대출 상환은 이자와 원금 두 건으로 갈라져 나온다. 고르는 것은 '어느 고정
-  // 내역을 적을까' 이므로, 같은 항목에서 나온 건들은 한 줄로 묶어 보여 준다.
-  const lines = [];
-  for (const t of pending) {
-    const hit = lines.find((x) => x.rid === t.recurringId);
-    if (hit) { hit.parts.push(t); hit.amount += t.amount; }
-    else lines.push({ rid: t.recurringId, parts: [t], amount: t.amount });
-  }
-
   // 아직 안 나간 것도 섞여 있다(급여일은 당겨졌어도 월세는 25일 그대로일 수 있다).
   // 그래서 전부 적지 않고, 오늘 실제로 움직인 것만 고르게 한다.
-  const picked = new Set(lines.map((x) => x.rid));
+  const picked = new Set(pending.map((t) => t.recurringId));
   const totals = el('div', {});
   const go = el('button', { class: 'btn primary' });
 
   const sync = () => {
-    const on = lines.filter((x) => picked.has(x.rid));
-    const parts = on.flatMap((x) => x.parts);
-    const out = sum(parts.filter((t) => t.kind !== 'income'), (t) => t.amount);
-    const income = sum(parts.filter((t) => t.kind === 'income'), (t) => t.amount);
+    const on = pending.filter((t) => picked.has(t.recurringId));
+    const out = sum(on.filter((t) => t.kind !== 'income'), (t) => t.amount);
+    const income = sum(on.filter((t) => t.kind === 'income'), (t) => t.amount);
     totals.replaceChildren(sumstrip([
       ['나가는 돈', out, 'out', true],
       ...(income ? [['들어오는 돈', income, 'in']] : []),
@@ -1510,30 +1495,23 @@ async function applyRecurringNow(ids, where) {
       text: `오늘 실제로 돈이 움직인 것만 골라 주세요. 오늘(${prettyDate(today())}) 날짜로 적히고, `
         + '원래 날이 와도 같은 건이 다시 적히지는 않아요. 고르지 않은 것은 원래 날이 되면 알아서 적혀요.',
     }),
-    el('div', { class: 'preview' }, lines.map((line) => {
-      const src = (store.config.recurring || []).find((r) => r.id === line.rid);
-      const one = line.parts.length === 1 ? line.parts[0] : null;
+    el('div', { class: 'preview' }, pending.map((t) => {
+      const src = (store.config.recurring || []).find((r) => r.id === t.recurringId);
       return el('label', { class: 'listline pickline' }, [
         el('input', {
           type: 'checkbox',
           checked: true,
           onchange: (e) => {
-            if (e.target.checked) picked.add(line.rid); else picked.delete(line.rid);
+            if (e.target.checked) picked.add(t.recurringId); else picked.delete(t.recurringId);
             sync();
           },
         }),
-        el('span', { class: 'tag', text: KIND_NAME[src?.kind] || '지출' }),
-        el('span', { text: src?.name || one?.memo || '고정 내역' }),
+        el('span', { class: 'tag', text: KIND_NAME[t.kind] || '지출' }),
+        el('span', { text: t.memo }),
         el('span', { class: 'tag', text: `원래 ${src?.day || 1}일` }),
-        // 대출 상환처럼 두 건으로 갈라지는 것은 어떻게 갈렸는지 같이 보여 준다
-        line.parts.length > 1
-          ? el('span', { class: 'tag', text: line.parts.map((t) => `${t.kind === 'expense' ? '이자' : '원금'} ${wonShort(t.amount)}`).join(' · ') })
-          : null,
         el('span', { class: 'spacer' }),
         el('span', {
-          class: 'num',
-          style: `font-weight:600;color:var(--${KIND_TONE[src?.kind] || 'out'})`,
-          text: won(line.amount),
+          class: 'num', style: `font-weight:600;color:var(--${KIND_TONE[t.kind] || 'out'})`, text: won(t.amount),
         }),
       ]);
     })),
@@ -1601,14 +1579,11 @@ function recurringGroupCard(group, items, showNote) {
       r.kind === 'transfer'
         ? el('span', { class: 'tag', text: `${store.account(r.accountId)?.name || '?'} → ${store.account(r.toAccountId)?.name || '?'}` })
         : null,
-      r.kind === 'loan'
-        ? el('span', { class: 'tag', text: `${store.account(r.loanId)?.name || '?'}${r.rate ? ` · 연 ${r.rate}%` : ''}` })
-        : null,
       el('span', { class: 'spacer' }),
       el('span', { class: 'num', style: `font-weight:600;color:var(--${KIND_TONE[r.kind] || 'out'})`, text: won(r.amount) }),
       el('button', { class: 'btn sm', text: '고치기', onclick: () => openRecurringSheet(r) }),
     ]))]
-    : [el('p', { class: 'empty', text: '월세·통신비처럼 매달 나가는 돈, 급여처럼 들어오는 돈, 급여일에 다른 통장으로 보내는 이체, 매달 갚는 대출을 넣어 두면 직접 적지 않아도 돼요.' })];
+    : [el('p', { class: 'empty', text: '월세·통신비처럼 매달 나가는 돈, 급여처럼 들어오는 돈, 급여일에 다른 통장으로 보내는 이체를 넣어 두면 직접 적지 않아도 돼요.' })];
 
   const totals = items.length
     ? [recurringStrip(t), showNote && t.transfer ? el('span', { class: 'hint', text: RECURRING_NOTE }) : null]
@@ -1621,64 +1596,26 @@ function recurringGroupCard(group, items, showNote) {
 function openRecurringSheet(existing, groupId) {
   const cats = () => store.config.categories;
   const groups = store.config.recurringGroups || [];
-  const loans = store.config.accounts.filter((a) => a.type === 'loan');
-  const interestCat = cats().find((c) => c.id === 'c_loan')
-    || cats().find((c) => c.kind === 'expense' && c.name.includes('이자'))
-    || cats().find((c) => c.kind === 'expense');
   const draft = existing ? { ...existing } : {
     id: uid('rc_'), name: '', amount: '', kind: 'expense',
     groupId: groupId || groups[0]?.id || null,
     categoryId: cats().find((c) => c.kind === 'expense')?.id || null,
     accountId: store.config.accounts[0]?.id || null,
     toAccountId: store.config.accounts[1]?.id || null,
-    loanId: loans[0]?.id || null, rate: '',
     day: 1, active: true, lastRun: null,
   };
   let backfill = !existing;
   const body = el('div', {});
 
-  /** 대출 상환일 때, 이번 달이라면 이자와 원금이 얼마씩일지 미리 센다 */
-  const loanSplit = () => {
-    const amount = Math.abs(Math.round(Number(draft.amount) || 0));
-    const left = Math.max(0, -(store.balances()[draft.loanId] || 0));
-    const interest = Math.min(Math.round((left * Math.max(0, Number(draft.rate) || 0)) / 1200), amount);
-    return { amount, left, interest, principal: Math.min(Math.max(0, amount - interest), left) };
-  };
-
-  // 금액·이율 칸은 칸을 떠날 때 값이 확정된다. 그때 시트 전체를 다시 그리면
-  // 방금까지 글자를 받던 칸이 통째로 사라져 브라우저가 화를 낸다.
-  // 그래서 이 안내 줄만 따로 떼어 두고 여기만 고쳐 쓴다.
-  const loanBanner = el('div', { class: 'banner', style: 'margin-bottom:14px' });
-  const syncLoanBanner = () => {
-    const v = loanSplit();
-    loanBanner.replaceChildren(
-      v.left > 0 && v.amount > 0
-        ? el('span', {}, [
-          '지금 남은 빚 ', el('b', { class: 'num', text: won(v.left) }), ' 기준으로, 이번 달은 이자 ',
-          el('b', { class: 'num', text: won(v.interest) }), ' · 원금 ',
-          el('b', { class: 'num', text: won(v.principal) }),
-          ' 으로 나뉘어 적혀요. 빚이 줄면 이자도 같이 줄어듭니다.',
-        ])
-        : el('span', { text: '매달 내는 돈과 연이율을 넣으면, 이자와 원금이 어떻게 나뉘는지 여기에 보여 드려요. 설정에서 이 대출의 남은 빚도 적어 두어야 해요.' }),
-    );
-  };
-
   const draw = () => {
-    // 대출 상환의 이자도 지출이라 지출 분류를 쓴다
-    const catKind = draft.kind === 'loan' ? 'expense' : draft.kind;
-    const kindCats = cats().filter((c) => c.kind === catKind);
+    const kindCats = cats().filter((c) => c.kind === draft.kind);
     if (draft.kind !== 'transfer' && !kindCats.some((c) => c.id === draft.categoryId)) draft.categoryId = kindCats[0]?.id || null;
     body.replaceChildren(
       el('div', { class: 'picker', style: 'margin-bottom:14px' }, [
         ['expense', '지출'], ['income', '수입'], ['transfer', '이체'],
-        ...(loans.length ? [['loan', '대출 상환']] : []),
       ].map(([k, n]) => el('button', {
         'aria-pressed': draft.kind === k ? 'true' : 'false', text: n,
-        onclick: () => {
-          draft.kind = k;
-          if (k === 'loan' && interestCat) draft.categoryId = interestCat.id;
-          draw();
-        },
+        onclick: () => { draft.kind = k; draw(); },
       }))),
       groups.length > 1 ? el('div', { class: 'field' }, [
         el('label', { text: '어느 묶음에' }),
@@ -1696,11 +1633,8 @@ function openRecurringSheet(existing, groupId) {
       ]),
       el('div', { class: 'row2' }, [
         el('div', { class: 'field amount' }, [
-          el('label', { text: draft.kind === 'loan' ? '매달 내는 돈 (원)' : '금액 (원)' }),
-          moneyInput({
-            value: draft.amount === '' ? null : draft.amount, placeholder: '0', label: '금액',
-            onCommit: (v) => { draft.amount = v ?? ''; if (draft.kind === 'loan') syncLoanBanner(); },
-          }),
+          el('label', { text: '금액 (원)' }),
+          moneyInput({ value: draft.amount === '' ? null : draft.amount, placeholder: '0', label: '금액', onCommit: (v) => { draft.amount = v ?? ''; } }),
         ]),
         el('div', { class: 'field' }, [
           el('label', { for: 'rc-day', text: '매월 며칠' }),
@@ -1710,10 +1644,7 @@ function openRecurringSheet(existing, groupId) {
         ]),
       ]),
       el('div', { class: 'field' }, [
-        el('label', {
-          for: 'rc-acct',
-          text: { transfer: '보내는 계좌', loan: '어디서 빠져나가나' }[draft.kind] || '결제수단',
-        }),
+        el('label', { for: 'rc-acct', text: draft.kind === 'transfer' ? '보내는 계좌' : '결제수단' }),
         el('select', { id: 'rc-acct', onchange: (e) => { draft.accountId = e.target.value; } },
           store.config.accounts.map((a) => el('option', { value: a.id, text: a.name, selected: draft.accountId === a.id }))),
       ]),
@@ -1723,37 +1654,13 @@ function openRecurringSheet(existing, groupId) {
           el('select', { id: 'rc-to', onchange: (e) => { draft.toAccountId = e.target.value; } },
             store.config.accounts.map((a) => el('option', { value: a.id, text: a.name, selected: draft.toAccountId === a.id }))),
         ])
-        : null,
-      draft.kind === 'loan' ? el('div', { class: 'row2' }, [
-        el('div', { class: 'field' }, [
-          el('label', { for: 'rc-loan', text: '어느 대출' }),
-          el('select', { id: 'rc-loan', onchange: (e) => { draft.loanId = e.target.value; draw(); } },
-            loans.map((a) => el('option', { value: a.id, text: a.name, selected: draft.loanId === a.id }))),
-        ]),
-        el('div', { class: 'field' }, [
-          el('label', { for: 'rc-rate', text: '연이율 (%)' }),
-          el('input', {
-            id: 'rc-rate', type: 'number', step: '0.01', min: '0', max: '30', inputmode: 'decimal',
-            value: draft.rate === '' || draft.rate === null || draft.rate === undefined ? '' : String(draft.rate),
-            placeholder: '예: 4.9',
-            oninput: (e) => {
-              draft.rate = e.target.value === '' ? '' : Number(e.target.value);
-              syncLoanBanner();
-            },
-          }),
-          el('span', { class: 'hint', text: '대출 약정서나 은행 앱에 적힌 금리예요.' }),
-        ]),
-      ]) : null,
-      draft.kind === 'loan' ? loanBanner : null,
-      draft.kind !== 'transfer'
-        ? el('div', { class: 'field' }, [
-          el('label', { text: draft.kind === 'loan' ? '이자를 어느 분류로' : '분류' }),
+        : el('div', { class: 'field' }, [
+          el('label', { text: '분류' }),
           el('div', { class: 'picker' }, kindCats.map((c) => el('button', {
             'aria-pressed': draft.categoryId === c.id ? 'true' : 'false', text: `${c.emoji} ${c.name}`,
             onclick: () => { draft.categoryId = c.id; draw(); },
           }))),
-        ])
-        : null,
+        ]),
       existing ? null : el('div', { class: 'banner' }, [
         el('label', { style: 'display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer' }, [
           el('input', { type: 'checkbox', checked: backfill, onchange: (e) => { backfill = e.target.checked; } }),
@@ -1768,14 +1675,8 @@ function openRecurringSheet(existing, groupId) {
     if (!draft.name.trim()) { toast('이름을 넣어 주세요'); return; }
     if (!draft.amount || Number(draft.amount) <= 0) { toast('금액을 넣어 주세요'); return; }
     if (draft.kind === 'transfer' && draft.accountId === draft.toAccountId) { toast('보내는 계좌와 받는 계좌가 같아요'); return; }
-    if (draft.kind === 'loan') {
-      if (!draft.loanId) { toast('어느 대출인지 골라 주세요'); return; }
-      if (draft.accountId === draft.loanId) { toast('빠져나가는 계좌와 대출이 같아요'); return; }
-    }
     const item = {
       ...draft, name: draft.name.trim(), amount: Number(draft.amount),
-      rate: draft.kind === 'loan' ? Math.max(0, Number(draft.rate) || 0) : null,
-      loanId: draft.kind === 'loan' ? draft.loanId : null,
       groupId: draft.groupId || groups[0]?.id || null,
     };
     if (!existing) item.lastRun = backfill ? monthKey(addMonths(today(), -1)) : monthKey(today());
