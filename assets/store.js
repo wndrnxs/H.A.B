@@ -755,8 +755,20 @@ class Store {
         }
         cursor = month;
         const txn = this.buildRecurring(r, month, date);
-        if (this.months[month]?.[txn.id]) { written = month; continue; }   // 이미 있음(지운 것 포함)
-        if (dryRun) { made.push(txn); written = month; continue; }
+        const prior = this.months[month]?.[txn.id];
+        // 지운 내역은 '지운 자국' 으로 남는다(함께 쓰는 사람 쪽에서도 지워져야 하니까).
+        // 자동 등록은 그 자국을 보고 비켜 간다 — 지운 걸 밤새 되살리면 안 되니까.
+        // 하지만 '지금 적기' 는 사람이 직접 누른 것이다. 잘못 적힌 걸 지우고 다시
+        // 누르는 게 당연한 길인데, 자국 때문에 영영 안 적히던 것을 푼다.
+        if (prior && (!early || !prior.deleted)) { written = month; continue; }
+        if (dryRun) {
+          if (prior?.deleted) txn.restored = true;   // 미리보기에만 쓰는 표시
+          made.push(txn);
+          written = month;
+          continue;
+        }
+        // 자국을 덮어쓴다. 서버 쪽은 겹쳐 쓰기라 이 값을 빼면 자국이 그대로 남는다.
+        if (prior?.deleted) txn.deleted = false;
         // 한 건이 실패해도 나머지는 적는다. 예전엔 여기서 통째로 멈춰서
         // '일부만 적히고 왜 안 됐는지도 모르는' 상태가 됐다.
         try {

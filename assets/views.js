@@ -1509,6 +1509,8 @@ async function applyRecurringNow(ids, where) {
         el('span', { class: 'tag', text: KIND_NAME[t.kind] || '지출' }),
         el('span', { text: t.memo }),
         el('span', { class: 'tag', text: `원래 ${src?.day || 1}일` }),
+        // 지웠던 것이 다시 올라온 줄은 그렇다고 알려 준다
+        t.restored ? el('span', { class: 'tag', text: '지웠던 것' }) : null,
         el('span', { class: 'spacer' }),
         el('span', {
           class: 'num', style: `font-weight:600;color:var(--${KIND_TONE[t.kind] || 'out'})`, text: won(t.amount),
