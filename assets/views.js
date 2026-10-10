@@ -796,6 +796,37 @@ function loanCard() {
 }
 
 /**
+ * 폰에서 계좌 줄의 '⋯' 가 여는 시트.
+ * 메모·표시·삭제를 한 줄에 다 늘어놓으면 줄이 하나 더 생긴다. 자주 누르는
+ * 것도 아니라 여기로 모았다. 넓은 화면에서는 그대로 줄에 펴 놓는다.
+ */
+function openAccountActionsSheet(account, index) {
+  openSheet(account.name, [
+    el('div', { class: 'quick', style: 'margin-bottom:10px' }, [
+      el('button', {
+        class: 'btn', text: account.note ? '메모 고치기' : '메모 남기기',
+        onclick: () => openAccountNoteSheet(account),
+      }),
+      el('button', {
+        class: 'btn', text: account.offDashboard ? '장부에 다시 표시' : '장부에서 숨기기',
+        onclick: async () => {
+          patchList('accounts', index, { offDashboard: !account.offDashboard });
+          closeSheet();
+          toast(account.offDashboard ? '장부에 다시 표시해요' : '장부에서 숨겼어요');
+        },
+      }),
+      el('button', {
+        class: 'btn danger', text: '계좌 지우기',
+        onclick: () => confirmThen(`'${account.name}' 계좌를 지울까요?`,
+          () => store.saveConfig({ accounts: store.config.accounts.filter((x) => x.id !== account.id) })),
+      }),
+    ]),
+    account.note ? el('p', { class: 'hint', style: 'margin:0 0 8px', text: `메모: ${account.note}` }) : null,
+    el('span', { class: 'hint', text: '숨기면 대시보드와 자산 화면의 순자산 계산에서 빠져요. 거래 기록은 그대로 남아요.' }),
+  ], []);
+}
+
+/**
  * 계좌에 남기는 메모.
  * '전세보증금 2.2억 중 내 돈 1.2억 · 배우자 8천 · 다음 집 계약금 2천' 처럼
  * 잔액 하나로는 설명되지 않는 것을 적어 둔다.
@@ -1832,7 +1863,7 @@ function viewSettings() {
     }),
     el('span', { class: 'spacer' }),
     c.kind === 'expense' ? labeledMoney('월 예산', '비워 두면 예산 관리에서 빠져요', {
-      value: c.budget, width: '130px', label: `${c.name} 월 예산`,
+      value: c.budget, label: `${c.name} 월 예산`,
       onCommit: (v) => patchList('categories', i, { budget: v === null ? null : Math.abs(v) }),
     }) : el('span', { class: 'tag', text: '수입' }),
     el('button', {
@@ -1866,7 +1897,7 @@ function viewSettings() {
         : '장부를 시작한 날의 잔액이에요',
       {
         value: ACCOUNT_TYPES[a.type]?.liability ? -(a.opening || 0) : a.opening || 0,
-        width: '140px', allowNegative: !ACCOUNT_TYPES[a.type]?.liability,
+        allowNegative: !ACCOUNT_TYPES[a.type]?.liability,
         label: ACCOUNT_TYPES[a.type]?.liability ? `${a.name} 남은 빚` : `${a.name} 시작 잔액`,
         onCommit: (v) => patchList('accounts', i, {
           opening: ACCOUNT_TYPES[a.type]?.liability ? -Math.abs(v || 0) : Math.round(v || 0),
@@ -1876,26 +1907,34 @@ function viewSettings() {
     // 대출은 '지금 남은 빚' 과 '처음 빌린 금액' 이 둘 다 있어야 얼마나 갚았는지 나온다.
     // 처음엔 대시보드에서만 넣을 수 있어서, 이미 일부 갚은 대출을 적다가 막혔다.
     a.type === 'loan' ? labeledMoney('처음 빌린 금액', '대출을 받았을 때의 금액이에요. 얼마나 갚았는지 세는 데 씁니다.', {
-      value: a.principal || null, width: '150px',
+      value: a.principal || null,
       label: `${a.name} 처음 빌린 금액`,
       onCommit: (v) => patchList('accounts', i, { principal: Math.abs(v || 0) || null }),
     }) : null,
-    // 점은 늘 자리를 잡고 있고 보이기만 켜고 끈다. 글자가 늘면 그 줄만 너비가 달라진다.
+    // 폰에서는 이 셋이 줄을 하나 더 잡아먹는다. 자주 누르는 것도 아니라 '⋯' 뒤로 넣는다.
+    el('div', { class: 'rowacts' }, [
+      // 점은 늘 자리를 잡고 있고 보이기만 켜고 끈다. 글자가 늘면 그 줄만 너비가 달라진다.
+      el('button', {
+        class: `btn sm notebtn ${a.note ? 'has' : ''}`,
+        title: a.note || '이 계좌 잔액이 어떤 돈인지 적어 둡니다',
+        onclick: () => openAccountNoteSheet(a),
+      }, ['메모', el('span', { class: 'dot', text: '●' })]),
+      el('button', {
+        class: 'chip', 'aria-pressed': a.offDashboard ? 'false' : 'true',
+        text: '장부에 표시', title: '끄면 대시보드와 자산 화면의 순자산 계산에서 빠집니다. 거래 기록은 그대로 남습니다.',
+        onclick: () => patchList('accounts', i, { offDashboard: !a.offDashboard }),
+      }),
+      el('button', {
+        class: 'btn sm danger', text: '삭제',
+        onclick: () => confirmThen(`'${a.name}' 계좌를 지울까요?`,
+          () => store.saveConfig({ accounts: cfg.accounts.filter((x) => x.id !== a.id) })),
+      }),
+    ]),
     el('button', {
-      class: `btn sm notebtn ${a.note ? 'has' : ''}`,
-      title: a.note || '이 계좌 잔액이 어떤 돈인지 적어 둡니다',
-      onclick: () => openAccountNoteSheet(a),
-    }, ['메모', el('span', { class: 'dot', text: '●' })]),
-    el('button', {
-      class: 'chip', 'aria-pressed': a.offDashboard ? 'false' : 'true',
-      text: '장부에 표시', title: '끄면 대시보드와 자산 화면의 순자산 계산에서 빠집니다. 거래 기록은 그대로 남습니다.',
-      onclick: () => patchList('accounts', i, { offDashboard: !a.offDashboard }),
-    }),
-    el('button', {
-      class: 'btn sm danger', text: '삭제',
-      onclick: () => confirmThen(`'${a.name}' 계좌를 지울까요?`,
-        () => store.saveConfig({ accounts: cfg.accounts.filter((x) => x.id !== a.id) })),
-    }),
+      class: `btn sm rowmore ${a.note ? 'has' : ''}`, 'aria-label': `${a.name} 더보기`,
+      title: '메모 · 장부에 표시 · 삭제',
+      onclick: () => openAccountActionsSheet(a, i),
+    }, ['⋯', el('span', { class: 'dot', text: '●' })]),
   ]))]));
 
   const json = JSON.stringify(store.exportData(), null, 0);
